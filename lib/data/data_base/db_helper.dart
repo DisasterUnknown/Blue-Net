@@ -82,6 +82,36 @@ class DBHelper {
     return await database.query('users');
   }
 
+  Future<int> updateUserName(String userCode, String newName) async {
+    final database = await db;
+    return await database.update(
+      'users',
+      {
+        'name': newName,
+        'lastConnected': DateTime.now().toIso8601String(),
+      },
+      where: 'userCode = ?',
+      whereArgs: [userCode],
+    );
+  }
+
+  Future<void> deleteUserAndChats(String userCode) async {
+    final database = await db;
+    await database.delete(
+      'users',
+      where: 'userCode = ?',
+      whereArgs: [userCode],
+    );
+    // Drop per-user chat table if it exists.
+    await database.execute('DROP TABLE IF EXISTS chat_$userCode');
+    // Optionally clean relay rows linked to this user.
+    await database.delete(
+      'nonUserMsgs',
+      where: 'senderUserCode = ? OR receiverUserCode = ?',
+      whereArgs: [userCode, userCode],
+    );
+  }
+
   // ===================== NON-USER MSGS =====================
   Future<int> insertNonUserMsg(Map<String, dynamic> msg) async {
     final database = await db;
@@ -201,6 +231,29 @@ class DBHelper {
     await createChatTable(userCode);
     return await database.delete(
       'chat_$userCode',
+      where: 'msgId = ?',
+      whereArgs: [msgId],
+    );
+  }
+
+  Future<int> updateChatMsg(
+    String userCode,
+    String msgId,
+    String newText, {
+    bool encrypt = false,
+    String? receiverUserCode,
+  }) async {
+    final database = await db;
+    await createChatTable(userCode);
+
+    String textToStore = newText;
+    if (encrypt && receiverUserCode != null && !_isEncrypted(newText)) {
+      textToStore = CryptoHelper.encryptMsg(newText, receiverUserCode);
+    }
+
+    return await database.update(
+      'chat_$userCode',
+      {'msg': textToStore},
       where: 'msgId = ?',
       whereArgs: [msgId],
     );

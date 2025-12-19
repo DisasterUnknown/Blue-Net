@@ -78,7 +78,9 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
 
-      body: buildChatList(),
+      body: buildChatList(
+        onContactsChanged: () => setState(() {}),
+      ),
 
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.greenAccent.shade400,

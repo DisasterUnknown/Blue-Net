@@ -22,15 +22,47 @@ Widget buildMessageBubble(Message msg, BuildContext context) {
           bottomRight: Radius.circular(msg.isMe ? 0 : 14),
         ),
       ),
-      child: isLongText
-          ? Column(
-              crossAxisAlignment: msg.isMe
-                  ? CrossAxisAlignment.end
-                  : CrossAxisAlignment.start,
+      child: Column(
+        crossAxisAlignment:
+            msg.isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (msg.replyPreview != null) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.only(bottom: 4),
+              decoration: BoxDecoration(
+                border: Border(
+                  left: BorderSide(
+                    color: Colors.grey.shade500,
+                    width: 2,
+                  ),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Text(
+                  msg.replyPreview!,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.grey.shade300,
+                    fontSize: 11,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+          ],
+          if (isLongText)
+            Column(
+              crossAxisAlignment:
+                  msg.isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
               children: [
                 Text(
                   msg.text,
-                  style: TextStyle(
+                  style: const TextStyle(
                     color: Colors.white,
                   ),
                 ),
@@ -44,7 +76,8 @@ Widget buildMessageBubble(Message msg, BuildContext context) {
                 ),
               ],
             )
-          : Row(
+          else
+            Row(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
@@ -53,7 +86,7 @@ Widget buildMessageBubble(Message msg, BuildContext context) {
                     padding: const EdgeInsets.only(bottom: 4),
                     child: Text(
                       msg.text,
-                      style: TextStyle(
+                      style: const TextStyle(
                         color: Colors.white,
                       ),
                     ),
@@ -69,6 +102,8 @@ Widget buildMessageBubble(Message msg, BuildContext context) {
                 ),
               ],
             ),
+        ],
+      ),
     ),
   );
 }
