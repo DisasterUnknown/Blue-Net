@@ -1,3 +1,4 @@
+import 'package:bluetooth_chat_app/services/routing_service.dart';
 import 'package:bluetooth_chat_app/ui/chat_page/chat_page.dart';
 import 'package:bluetooth_chat_app/data/data_base/db_helper.dart';
 import 'package:bluetooth_chat_app/services/uuid_service.dart';
@@ -40,38 +41,15 @@ Widget buildChatList({VoidCallback? onContactsChanged}) {
                     style: const TextStyle(color: Colors.black),
                   ),
                 ),
-                title: Text(
-                  name,
-                  style: const TextStyle(color: Colors.white),
-                ),
+                title: Text(name, style: const TextStyle(color: Colors.white)),
                 subtitle: Text(
                   userCode,
                   style: TextStyle(color: Colors.grey.shade400),
                 ),
                 onTap: () {
-                  Navigator.push(
-                    context,
-                    PageRouteBuilder(
-                      pageBuilder:
-                          (context, animation, secondaryAnimation) =>
-                              ChatPage(userName: name, userId: userCode),
-                      transitionsBuilder:
-                          (context, animation, secondaryAnimation, child) {
-                        const begin = Offset(1.0, 0.0);
-                        const end = Offset.zero;
-                        const curve = Curves.ease;
-
-                        final tween = Tween(
-                          begin: begin,
-                          end: end,
-                        ).chain(CurveTween(curve: curve));
-
-                        return SlideTransition(
-                          position: animation.drive(tween),
-                          child: child,
-                        );
-                      },
-                    ),
+                  RoutingService().navigateWithSlide(
+                    begin: Offset(0.0, 1.0),
+                    ChatPage(userName: name, userId: userCode),
                   );
                 },
                 onLongPress: () {
@@ -154,8 +132,8 @@ void _showContactActions({
                           backgroundColor: Colors.greenAccent,
                           foregroundColor: Colors.black,
                         ),
-                        onPressed: () => Navigator.pop(
-                            context, controller.text.trim()),
+                        onPressed: () =>
+                            Navigator.pop(context, controller.text.trim()),
                         child: const Text('Save'),
                       ),
                     ],
@@ -169,8 +147,10 @@ void _showContactActions({
               },
             ),
             ListTile(
-              leading:
-                  const Icon(Icons.delete_outline, color: Colors.redAccent),
+              leading: const Icon(
+                Icons.delete_outline,
+                color: Colors.redAccent,
+              ),
               title: const Text(
                 'Delete Contact & Chats',
                 style: TextStyle(color: Colors.redAccent),

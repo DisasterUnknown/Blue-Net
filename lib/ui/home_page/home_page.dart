@@ -1,3 +1,4 @@
+import 'package:bluetooth_chat_app/services/routing_service.dart';
 import 'package:bluetooth_chat_app/ui/home_page/widget/add_user_dialog_box.dart';
 import 'package:bluetooth_chat_app/ui/home_page/widget/app_search_delegate.dart';
 import 'package:bluetooth_chat_app/ui/home_page/widget/chat_builder.dart';
@@ -13,33 +14,11 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   // 🔹 Sample searchable data (replace with real data later)
-  final List<String> searchData = [
-    'User 0',
-    'User 1',
-    'User 2',
-  ];
+  final List<String> searchData = ['User 0', 'User 1', 'User 2'];
 
   void _openInfoPage() {
-    Navigator.push(
-      context,
-      PageRouteBuilder(
-        pageBuilder: (context, animation, secondaryAnimation) =>
-            const InfoPage(),
-        transitionsBuilder:
-            (context, animation, secondaryAnimation, child) {
-          const begin = Offset(0.0, 1.0); // slide up from bottom
-          const end = Offset.zero;
-          const curve = Curves.easeOut;
-
-          final tween = Tween(begin: begin, end: end)
-              .chain(CurveTween(curve: curve));
-
-          return SlideTransition(
-            position: animation.drive(tween),
-            child: child,
-          );
-        },
-      ),
+    RoutingService().navigateWithSlide(
+      InfoPage()
     );
   }
 
@@ -78,9 +57,7 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
 
-      body: buildChatList(
-        onContactsChanged: () => setState(() {}),
-      ),
+      body: buildChatList(onContactsChanged: () => setState(() {})),
 
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.greenAccent.shade400,
