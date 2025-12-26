@@ -23,7 +23,7 @@ class LogService {
     if (_logFile == null) return;
     try {
       final timestamp = DateTime.now().toIso8601String();
-      final logLine = "[$timestamp] [$tag]: $message\n\n";
+      final logLine = "[$timestamp] [${tag.displayName}]: $message\n\n";
       _logFile!.writeAsStringSync(logLine, mode: FileMode.append, flush: true);
       _trimFileIfNeeded();
       debugPrint(logLine);

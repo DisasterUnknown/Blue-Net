@@ -34,7 +34,11 @@ class _ViewLogsPageState extends State<ViewLogsPage> {
 
       if (timestampMatch != null && typeMatch != null) {
         final timestamp = timestampMatch.group(1)!;
-        final type = typeMatch.group(1)! as LogTypes;
+        final typeString = typeMatch.group(1)!;
+        final type = LogTypes.values.firstWhere(
+          (e) => e.name.toLowerCase() == typeString.toLowerCase(),
+          orElse: () => LogTypes.info,
+        );
         final message = line.substring(line.indexOf(']:') + 2).trim();
         entries.add(
           LogEntry(timestamp: timestamp, type: type, message: message),
@@ -50,12 +54,10 @@ class _ViewLogsPageState extends State<ViewLogsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: const Color(0xFF1F1F1F),
-        title: const Text(
-          'Logs',
-          style: TextStyle(color: Colors.white),
-        ),
+        title: const Text('Logs', style: TextStyle(color: Colors.white)),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: Padding(
@@ -78,10 +80,8 @@ class _ViewLogsPageState extends State<ViewLogsPage> {
                               style: const TextStyle(color: Colors.grey),
                             ),
                             TextSpan(
-                              text: '[${entry.type}]: ',
-                              style: TextStyle(
-                                color: getTypeColor(entry.type),
-                              ),
+                              text: '[${entry.type.displayName}]: ',
+                              style: TextStyle(color: getTypeColor(entry.type)),
                             ),
                             TextSpan(text: '${entry.message}\n\n'),
                           ],

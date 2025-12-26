@@ -13,7 +13,7 @@ class InfoPage extends StatelessWidget {
     final mesh = MeshService.instance;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF121212),
+      backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: const Color(0xFF1F1F1F),
         title: const Text(
