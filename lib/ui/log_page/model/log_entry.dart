@@ -1,6 +1,8 @@
+import 'package:bluetooth_chat_app/core/enums/logs_enums.dart';
+
 class LogEntry {
   final String timestamp;
-  final String type;
+  final logTypes type;
   final String message;
 
   LogEntry({

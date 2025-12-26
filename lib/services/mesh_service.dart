@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:bluetooth_chat_app/core/enums/logs_enums.dart';
 import 'package:flutter/foundation.dart';
 
 import 'package:bluetooth_chat_app/data/data_base/db_helper.dart';
@@ -157,7 +158,7 @@ class MeshService {
     );
 
     await _blePeripheral.start(advertiseData: advertiseData);
-    LogService.log('Mesh', 'Advertising as Mesh-$myId');
+    LogService.log(logTypes.info, 'Advertising as Mesh-$myId');
   }
 
   Future<void> _stopAdvertising() async {
@@ -212,7 +213,7 @@ class MeshService {
             handleIncomingBatch(raw, id);
           });
         } catch (_) {
-          LogService.log('Mesh', 'Chunk decode failed');
+          LogService.log(logTypes.info, 'Chunk decode failed');
         }
       }
 

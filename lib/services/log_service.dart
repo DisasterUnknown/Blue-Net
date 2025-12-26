@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:bluetooth_chat_app/core/enums/logs_enums.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -14,11 +15,11 @@ class LogService {
     if (!_logFile!.existsSync()) {
       _logFile!.createSync(recursive: true);
     }
-    LogService.log("Success", 'Log file initialized at: ${_logFile!.path}');
+    LogService.log(logTypes.success, 'Log file initialized at: ${_logFile!.path}');
   }
 
   /// Write log entry
-  static void log(String tag, String message) {
+  static void log(logTypes tag, String message) {
     if (_logFile == null) return;
     try {
       final timestamp = DateTime.now().toIso8601String();
@@ -27,7 +28,7 @@ class LogService {
       _trimFileIfNeeded();
       debugPrint(logLine);
     } catch (e) {
-      LogService.log("Error", 'Error writing log: $e');
+      LogService.log(logTypes.error, 'Error writing log: $e');
     }
   }
 
@@ -50,7 +51,7 @@ class LogService {
       final newLines = lines.sublist(startIndex);
       _logFile!.writeAsStringSync('${newLines.join('\n')}\n', flush: true);
     } catch (e) {
-      LogService.log("Error", 'Error trimming log file: $e');
+      LogService.log(logTypes.error, 'Error trimming log file: $e');
     }
   }
 
@@ -70,10 +71,10 @@ class LogService {
 
       final file = File('$dirPath/app_logs.log');
       await file.writeAsBytes(await _logFile!.readAsBytes(), flush: true);
-      LogService.log("Success", 'Log saved to: ${file.path}');
+      LogService.log(logTypes.success, 'Log saved to: ${file.path}');
       return file.path;
     } catch (e) {
-      LogService.log("Error", 'Error saving log: $e');
+      LogService.log(logTypes.error, 'Error saving log: $e');
       return null;
     }
   }
@@ -84,9 +85,9 @@ class LogService {
     try {
       await _logFile!.writeAsString('', flush: true);
       debugPrint('All logs cleared.');
-      log("Success", "Log file cleared.");
+      LogService.log(logTypes.success, "Log file cleared.");
     } catch (e) {
-      log("Error", 'Error clearing log file: $e');
+      LogService.log(logTypes.error, 'Error clearing log file: $e');
     }
   }
 

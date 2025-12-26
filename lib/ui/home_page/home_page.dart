@@ -3,6 +3,7 @@ import 'package:bluetooth_chat_app/ui/home_page/widget/add_user_dialog_box.dart'
 import 'package:bluetooth_chat_app/ui/home_page/widget/app_search_delegate.dart';
 import 'package:bluetooth_chat_app/ui/home_page/widget/chat_builder.dart';
 import 'package:bluetooth_chat_app/ui/info_page/info_page.dart';
+import 'package:bluetooth_chat_app/ui/log_page/view_logs_page.dart';
 import 'package:flutter/material.dart';
 
 class HomePage extends StatefulWidget {
@@ -17,15 +18,11 @@ class _HomePageState extends State<HomePage> {
   final List<String> searchData = ['User 0', 'User 1', 'User 2'];
 
   void _openInfoPage() {
-    RoutingService().navigateWithSlide(
-      InfoPage()
-    );
+    RoutingService().navigateWithSlide(InfoPage());
   }
 
   void _openLogsPage() {
-    RoutingService().navigateWithSlide(
-      InfoPage()
-    );
+    RoutingService().navigateWithSlide(ViewLogsPage());
   }
 
   @override
@@ -46,7 +43,7 @@ class _HomePageState extends State<HomePage> {
           // 🪵 Logs / METRICS PAGE
           IconButton(
             icon: const Icon(Icons.dynamic_form_outlined),
-            tooltip: 'Mesh & DB Info',
+            tooltip: 'Logs',
             onPressed: _openLogsPage,
           ),
 

@@ -1,3 +1,4 @@
+import 'package:bluetooth_chat_app/core/enums/logs_enums.dart';
 import 'package:bluetooth_chat_app/services/log_service.dart';
 import 'package:bluetooth_chat_app/ui/log_page/model/log_entry.dart';
 import 'package:bluetooth_chat_app/ui/log_page/utils/get_type_color.dart';
@@ -33,7 +34,7 @@ class _ViewLogsPageState extends State<ViewLogsPage> {
 
       if (timestampMatch != null && typeMatch != null) {
         final timestamp = timestampMatch.group(1)!;
-        final type = typeMatch.group(1)!;
+        final type = typeMatch.group(1)! as logTypes;
         final message = line.substring(line.indexOf(']:') + 2).trim();
         entries.add(
           LogEntry(timestamp: timestamp, type: type, message: message),
