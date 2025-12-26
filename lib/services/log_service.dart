@@ -15,11 +15,11 @@ class LogService {
     if (!_logFile!.existsSync()) {
       _logFile!.createSync(recursive: true);
     }
-    LogService.log(logTypes.success, 'Log file initialized at: ${_logFile!.path}');
+    LogService.log(LogTypes.success, 'Log file initialized at: ${_logFile!.path}');
   }
 
   /// Write log entry
-  static void log(logTypes tag, String message) {
+  static void log(LogTypes tag, String message) {
     if (_logFile == null) return;
     try {
       final timestamp = DateTime.now().toIso8601String();
@@ -28,7 +28,7 @@ class LogService {
       _trimFileIfNeeded();
       debugPrint(logLine);
     } catch (e) {
-      LogService.log(logTypes.error, 'Error writing log: $e');
+      LogService.log(LogTypes.error, 'Error writing log: $e');
     }
   }
 
@@ -51,7 +51,7 @@ class LogService {
       final newLines = lines.sublist(startIndex);
       _logFile!.writeAsStringSync('${newLines.join('\n')}\n', flush: true);
     } catch (e) {
-      LogService.log(logTypes.error, 'Error trimming log file: $e');
+      LogService.log(LogTypes.error, 'Error trimming log file: $e');
     }
   }
 
@@ -71,10 +71,10 @@ class LogService {
 
       final file = File('$dirPath/app_logs.log');
       await file.writeAsBytes(await _logFile!.readAsBytes(), flush: true);
-      LogService.log(logTypes.success, 'Log saved to: ${file.path}');
+      LogService.log(LogTypes.success, 'Log saved to: ${file.path}');
       return file.path;
     } catch (e) {
-      LogService.log(logTypes.error, 'Error saving log: $e');
+      LogService.log(LogTypes.error, 'Error saving log: $e');
       return null;
     }
   }
@@ -85,9 +85,9 @@ class LogService {
     try {
       await _logFile!.writeAsString('', flush: true);
       debugPrint('All logs cleared.');
-      LogService.log(logTypes.success, "Log file cleared.");
+      LogService.log(LogTypes.success, "Log file cleared.");
     } catch (e) {
-      LogService.log(logTypes.error, 'Error clearing log file: $e');
+      LogService.log(LogTypes.error, 'Error clearing log file: $e');
     }
   }
 

@@ -34,7 +34,7 @@ class _ViewLogsPageState extends State<ViewLogsPage> {
 
       if (timestampMatch != null && typeMatch != null) {
         final timestamp = timestampMatch.group(1)!;
-        final type = typeMatch.group(1)! as logTypes;
+        final type = typeMatch.group(1)! as LogTypes;
         final message = line.substring(line.indexOf(']:') + 2).trim();
         entries.add(
           LogEntry(timestamp: timestamp, type: type, message: message),

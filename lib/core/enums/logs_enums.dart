@@ -1,4 +1,4 @@
-enum logTypes {
+enum LogTypes {
   error,
   success,
   info,

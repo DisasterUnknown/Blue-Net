@@ -158,7 +158,7 @@ class MeshService {
     );
 
     await _blePeripheral.start(advertiseData: advertiseData);
-    LogService.log(logTypes.info, 'Advertising as Mesh-$myId');
+    LogService.log(LogTypes.info, 'Advertising as Mesh-$myId');
   }
 
   Future<void> _stopAdvertising() async {
@@ -213,7 +213,7 @@ class MeshService {
             handleIncomingBatch(raw, id);
           });
         } catch (_) {
-          LogService.log(logTypes.info, 'Chunk decode failed');
+          LogService.log(LogTypes.info, 'Chunk decode failed');
         }
       }
 
