@@ -22,6 +22,12 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  void _openLogsPage() {
+    RoutingService().navigateWithSlide(
+      InfoPage()
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -37,6 +43,13 @@ class _HomePageState extends State<HomePage> {
         iconTheme: const IconThemeData(color: Colors.white),
 
         actions: [
+          // 🪵 Logs / METRICS PAGE
+          IconButton(
+            icon: const Icon(Icons.dynamic_form_outlined),
+            tooltip: 'Mesh & DB Info',
+            onPressed: _openLogsPage,
+          ),
+
           // ℹ️ INFO / METRICS PAGE
           IconButton(
             icon: const Icon(Icons.analytics_outlined),
