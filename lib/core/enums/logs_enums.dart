@@ -9,7 +9,10 @@ enum LogTypes {
   nearbyTransport,
   wifiDirectTransport,
   gossipService,
-  meshIncidentSync;
+  gossipProtocol,
+  meshIncidentSync,
+  permissionHandler,
+  bluetoothController;
 
   String get displayName {
     switch (this) {
@@ -33,8 +36,14 @@ enum LogTypes {
         return 'WiFiDirectTransport';
       case LogTypes.gossipService:
         return 'GossipService';
+      case LogTypes.gossipProtocol:
+        return 'GossipProtocol';
       case LogTypes.meshIncidentSync:
         return 'MeshIncidentSync';
+      case LogTypes.permissionHandler:
+        return 'PermissionHandler';
+      case LogTypes.bluetoothController:
+        return 'BluetoothController';
     }
   }
 }

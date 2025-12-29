@@ -33,8 +33,7 @@ class Peer {
   bool get supportsBluetooth =>
       transport == TransportType.bluetooth || transport == TransportType.both;
 
-  bool get supportsWiFi =>
-      transport == TransportType.wifiDirect || transport == TransportType.both;
+  bool get supportsWiFi => false; // WiFi support removed
 
   bool isStale(Duration threshold) {
     return DateTime.now().difference(lastSeen) > threshold;

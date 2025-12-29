@@ -23,7 +23,13 @@ Color getTypeColor(LogTypes type) {
       return Colors.amberAccent;
     case LogTypes.gossipService:
       return Colors.indigoAccent;
+    case LogTypes.gossipProtocol:
+      return Colors.deepPurpleAccent;
     case LogTypes.meshIncidentSync:
       return Colors.limeAccent;
+    case LogTypes.permissionHandler:
+      return Colors.pinkAccent;
+    case LogTypes.bluetoothController:
+      return Colors.lightBlueAccent;
   }
 }

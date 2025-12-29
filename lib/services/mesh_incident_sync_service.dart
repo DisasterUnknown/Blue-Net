@@ -1,26 +1,20 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:bluetooth_chat_app/core/connection-logic/gossip/gossip_message.dart';
 import 'package:bluetooth_chat_app/core/connection-logic/gossip/gossip_payload.dart';
 import 'package:bluetooth_chat_app/core/connection-logic/gossip/peer.dart';
 import 'package:bluetooth_chat_app/core/connection-logic/transport/gossip_transport.dart';
 import 'package:bluetooth_chat_app/core/connection-logic/transport/transport_manager.dart';
-import 'package:bluetooth_chat_app/core/constants/app_constants.dart';
 import 'package:bluetooth_chat_app/core/enums/logs_enums.dart';
-import 'package:bluetooth_chat_app/core/shared_prefs/shared_pref_service.dart';
 import 'package:bluetooth_chat_app/data/data_base/db_helper.dart';
-import 'package:bluetooth_chat_app/mapper/incident_mapper.dart';
 import 'package:bluetooth_chat_app/services/log_service.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:http/http.dart' as http;
 
 /// Mesh Incident Sync Service
 ///
 /// Handles:
 /// 1. Periodic data exchange every 10 seconds between all connected devices
 /// 2. Duplicate detection and prevention
-/// 3. Server sync when internet comes back
-/// 4. Confirmation messages to peers when help is on the way
+/// 3. Stop broadcasting when message is received by owner
+/// 4. Update incident status across devices when received
 class MeshIncidentSyncService {
   static final MeshIncidentSyncService _instance =
       MeshIncidentSyncService._internal();
@@ -31,18 +25,15 @@ class MeshIncidentSyncService {
   StreamSubscription? _messageSubscription;
   StreamSubscription? _peerSubscription;
   StreamSubscription? _peerDisconnectedSubscription;
-  StreamSubscription? _connectivitySubscription;
   Timer? _periodicSyncTimer;
-  Timer? _serverSyncTimer;
   bool _isInitialized = false;
-  bool _isSyncingToServer = false;
 
   // Track which incidents have been sent to which peers
   // Map<peerId, Set<incidentId>> - tracks what each peer already has
   final Map<String, Set<String>> _sentToPeers = {};
 
-  // Track which incidents have been synced to server (don't keep re-sending these)
-  final Set<String> _syncedToServer = {};
+  // Track which incidents have been received by owner (stop broadcasting these)
+  final Set<String> _receivedByOwner = {};
 
   /// Initialize the service
   Future<void> initialize(TransportManager transportManager) async {
@@ -65,26 +56,17 @@ class MeshIncidentSyncService {
       _handlePeerDisconnected,
     );
 
-    // Listen to connectivity changes to sync to server when internet comes back
-    _connectivitySubscription = Connectivity().onConnectivityChanged.listen(
-      _handleConnectivityChange,
-    );
-
     // Start periodic mesh sync every 10 seconds
     _periodicSyncTimer = Timer.periodic(
       const Duration(seconds: 10),
       (_) => _syncToAllPeers(),
     );
 
-    // Periodic server sync check every 30 seconds
-    _serverSyncTimer = Timer.periodic(
-      const Duration(seconds: 30),
-      (_) => _checkAndSyncToServer(),
-    );
+    // Start periodic cleanup of non-owned data
+    _startPeriodicCleanup();
 
     // Initial sync
     _syncToAllPeers();
-    _checkAndSyncToServer();
 
     _isInitialized = true;
     LogService.log(LogTypes.meshIncidentSync, 'Service initialized');
@@ -102,9 +84,9 @@ class MeshIncidentSyncService {
         // Process as incident data
         await _processIncomingIncident(message.payload.data, peer);
       }
-      // Check if this is a confirmation message
+      // Check if this is a received confirmation (stop broadcasting)
       else if (message.payload.type == PayloadType.confirmation) {
-        await _processConfirmation(message.payload.data, peer);
+        await _processReceivedConfirmation(message.payload.data, peer);
       }
     } catch (e, stack) {
       LogService.log(
@@ -127,24 +109,36 @@ class MeshIncidentSyncService {
           incidentData['id'] ??
           _generateIncidentId(incidentData);
 
-      // Check if we already have this incident (duplicate detection)
-      final db = DBHelper();
-      final existingIncoming = await db.getIncomingIncidents();
-      final existingOutgoing = await db.getOutgoingIncidents();
-
-      // Check in incoming incidents
-      bool isDuplicate = existingIncoming.any(
-        (inc) => inc['remoteId'] == incidentId,
-      );
-
-      // Check in outgoing incidents
-      if (!isDuplicate) {
-        isDuplicate = existingOutgoing.any(
-          (inc) => inc['localId'] == incidentId,
+      // Check if already received by owner (stop broadcasting)
+      if (_receivedByOwner.contains(incidentId)) {
+        LogService.log(
+          LogTypes.meshIncidentSync,
+          'Incident $incidentId already received by owner, ignoring',
         );
+        return;
       }
 
-      if (isDuplicate) {
+      // Check in database for duplicates using efficient query
+      final db = DBHelper();
+      final database = await db.db;
+      
+      // Check in incoming incidents
+      final existingIncoming = await database.query(
+        'incident_reports_incoming',
+        where: 'remoteId = ?',
+        whereArgs: [incidentId],
+        limit: 1,
+      );
+      
+      // Check in outgoing incidents (if this is our own incident)
+      final existingOutgoing = await database.query(
+        'incident_reports_outgoing',
+        where: 'localId = ?',
+        whereArgs: [incidentId],
+        limit: 1,
+      );
+
+      if (existingIncoming.isNotEmpty || existingOutgoing.isNotEmpty) {
         LogService.log(
           LogTypes.meshIncidentSync,
           'Duplicate incident $incidentId received from ${peer.id}, ignoring',
@@ -188,8 +182,29 @@ class MeshIncidentSyncService {
         '(Original reporter: userId=$originalUserId, uniqueId=$originalUniqueId)',
       );
 
-      // Re-broadcast to other peers (gossip protocol) - preserve original data
-      await _broadcastIncident(incidentData, excludePeerId: peer.id);
+      // Check if this incident belongs to this device (userId matches)
+      final myUserId = await _getMyUserId();
+      if (originalUserId != null && originalUserId == myUserId) {
+        // This is our incident - mark as received and stop broadcasting
+        _receivedByOwner.add(incidentId);
+        
+        // Update database to mark as received in both tables
+        await db.markIncidentAsReceived(incidentId);
+        
+        // Broadcast received confirmation to stop other devices from broadcasting
+        await _broadcastReceivedConfirmation(incidentId);
+        
+        LogService.log(
+          LogTypes.meshIncidentSync,
+          'Incident $incidentId received by owner (userId=$myUserId), stopping broadcasts',
+        );
+      } else {
+        // Re-broadcast to other peers (gossip protocol) - preserve original data
+        // Only if not already received by owner
+        if (!_receivedByOwner.contains(incidentId)) {
+          await _broadcastIncident(incidentData, excludePeerId: peer.id);
+        }
+      }
     } catch (e, stack) {
       LogService.log(
         LogTypes.meshIncidentSync,
@@ -198,23 +213,45 @@ class MeshIncidentSyncService {
     }
   }
 
-  /// Process confirmation message
-  Future<void> _processConfirmation(
+  /// Process received confirmation - stop broadcasting this incident
+  Future<void> _processReceivedConfirmation(
     Map<String, dynamic> confirmationData,
     Peer peer,
   ) async {
     try {
-      final formId =
-          confirmationData['form_id'] ?? confirmationData['incident_id'];
-      final status = confirmationData['status'];
+      final incidentId =
+          confirmationData['form_id'] ?? 
+          confirmationData['incident_id'] ??
+          confirmationData['incidentId'];
+
+      if (incidentId == null) return;
+
+      final incidentIdStr = incidentId.toString();
+      
+      // Check if we already processed this confirmation
+      if (_receivedByOwner.contains(incidentIdStr)) {
+        return; // Already processed
+      }
 
       LogService.log(
         LogTypes.meshIncidentSync,
-        'Received confirmation from ${peer.id}: Incident $formId - $status',
+        'Received confirmation from ${peer.id}: Incident $incidentIdStr received by owner',
       );
 
-      // You can update UI or show notification here
-      // For now, just log it
+      // Mark as received by owner - stop broadcasting
+      _receivedByOwner.add(incidentIdStr);
+      
+      // Update database in both incoming and outgoing tables
+      final db = DBHelper();
+      await db.markIncidentAsReceived(incidentIdStr);
+      
+      // Re-broadcast this confirmation to other peers (so they also stop broadcasting)
+      await _broadcastReceivedConfirmation(incidentIdStr, excludePeerId: peer.id);
+      
+      LogService.log(
+        LogTypes.meshIncidentSync,
+        'Stopped broadcasting incident $incidentIdStr based on confirmation from ${peer.id}',
+      );
     } catch (e, stack) {
       LogService.log(
         LogTypes.meshIncidentSync,
@@ -227,23 +264,18 @@ class MeshIncidentSyncService {
   Future<void> _handlePeerDiscovered(Peer peer) async {
     LogService.log(
       LogTypes.meshIncidentSync,
-      'New peer discovered: ${peer.id}, syncing data...',
+      'New peer discovered: ${peer.id} (${peer.name}) - Initializing data sync, Total connected peers: ${_transportManager?.connectedPeers.length ?? 0}',
     );
     // Initialize tracking for this peer
     _sentToPeers[peer.id] = <String>{};
     // Sync all data to this new peer
     await _syncToPeer(peer);
+    LogService.log(
+      LogTypes.meshIncidentSync,
+      'Completed initial sync with peer ${peer.id}',
+    );
   }
 
-  /// Handle connectivity changes - sync to server when internet comes back
-  Future<void> _handleConnectivityChange(
-    List<ConnectivityResult> results,
-  ) async {
-    if (results.any((r) => r != ConnectivityResult.none)) {
-      // Internet might be available, check and sync
-      await _checkAndSyncToServer();
-    }
-  }
 
   /// Sync all incident data to all connected peers (every 10 seconds)
   Future<void> _syncToAllPeers() async {
@@ -251,16 +283,13 @@ class MeshIncidentSyncService {
 
     final peers = _transportManager!.connectedPeers;
     if (peers.isEmpty) {
-      LogService.log(
-        LogTypes.meshIncidentSync,
-        'No peers connected, skipping sync',
-      );
+      // Don't log every 10 seconds when no peers - too verbose
       return;
     }
 
     LogService.log(
       LogTypes.meshIncidentSync,
-      'Syncing to all connected peers...',
+      'Periodic sync: Syncing incident data to ${peers.length} connected peer(s)',
     );
 
     for (final peer in peers) {
@@ -286,30 +315,40 @@ class MeshIncidentSyncService {
       final allIncidents = <Map<String, dynamic>>[];
 
       // Send outgoing incidents (created by this user - has our userId/uniqueId)
+      // Only send if not already received by owner
       for (final inc in outgoing) {
         final incidentId = inc['localId'] as String?;
-        if (incidentId != null && !sentToThisPeer.contains(incidentId)) {
-          allIncidents.add({
-            'localId': incidentId,
-            'type': inc['type'],
-            'riskLevel': inc['riskLevel'],
-            'latitude': inc['latitude'],
-            'longitude': inc['longitude'],
-            'reportedAt': inc['reportedAt'],
-            'photoPath': inc['photoPath'],
-            'description': inc['description'],
-            'userId': inc['userId'], // Our userId (original reporter)
-            'uniqueId':
-                inc['uniqueId'] ??
-                incidentId, // Our uniqueId (original reporter)
-          });
+        if (incidentId != null && 
+            !sentToThisPeer.contains(incidentId) &&
+            !_receivedByOwner.contains(incidentId)) {
+          // Check if this incident is already synced/received
+          final isSynced = inc['synced'] as int? ?? 0;
+          if (isSynced == 0) {
+            allIncidents.add({
+              'localId': incidentId,
+              'type': inc['type'],
+              'riskLevel': inc['riskLevel'],
+              'latitude': inc['latitude'],
+              'longitude': inc['longitude'],
+              'reportedAt': inc['reportedAt'],
+              'photoPath': inc['photoPath'],
+              'description': inc['description'],
+              'userId': inc['userId'], // Our userId (original reporter)
+              'uniqueId':
+                  inc['uniqueId'] ??
+                  incidentId, // Our uniqueId (original reporter)
+            });
+          }
         }
       }
 
       // Send incoming incidents (received from others - preserve original reporter's userId/uniqueId)
+      // Only send if not already received by owner
       for (final inc in incoming) {
         final incidentId = inc['remoteId'] as String?;
-        if (incidentId != null && !sentToThisPeer.contains(incidentId)) {
+        if (incidentId != null && 
+            !sentToThisPeer.contains(incidentId) &&
+            !_receivedByOwner.contains(incidentId)) {
           allIncidents.add({
             'localId': incidentId,
             'type': inc['type'],
@@ -389,11 +428,27 @@ class MeshIncidentSyncService {
 
   /// Broadcast incident to all peers (except excluded one)
   /// IMPORTANT: Preserves original reporter's userId and uniqueId - never changes them
+  /// Only broadcasts if not already received by owner
   Future<void> _broadcastIncident(
     Map<String, dynamic> incidentData, {
     String? excludePeerId,
   }) async {
     if (_transportManager == null) return;
+
+    // Extract incident ID
+    final incidentId =
+        incidentData['localId'] ??
+        incidentData['id'] ??
+        _generateIncidentId(incidentData);
+
+    // Don't broadcast if already received by owner
+    if (_receivedByOwner.contains(incidentId)) {
+      LogService.log(
+        LogTypes.meshIncidentSync,
+        'Skipping broadcast for $incidentId - already received by owner',
+      );
+      return;
+    }
 
     final peers = _transportManager!.connectedPeers
         .where((p) => p.id != excludePeerId)
@@ -404,12 +459,6 @@ class MeshIncidentSyncService {
     // CRITICAL: Use incidentData as-is to preserve original userId and uniqueId
     // We never modify or replace the original reporter's information
     try {
-      // Extract incident ID for stable message ID
-      final incidentId =
-          incidentData['localId'] ??
-          incidentData['id'] ??
-          _generateIncidentId(incidentData);
-
       final payload = GossipPayload(
         type: PayloadType.incidentData,
         data:
@@ -444,195 +493,52 @@ class MeshIncidentSyncService {
     }
   }
 
-  /// Check internet connectivity and sync to server if available
-  Future<void> _checkAndSyncToServer() async {
-    if (_isSyncingToServer) return;
-
-    try {
-      // Quick connectivity check
-      final connectivity = await Connectivity().checkConnectivity();
-      if (connectivity.contains(ConnectivityResult.none)) {
-        return; // No internet
-      }
-
-      // Verify actual internet access
-      try {
-        final response = await http
-            .head(Uri.parse('https://www.google.com'))
-            .timeout(const Duration(seconds: 3));
-        if (response.statusCode != 200) {
-          return; // No real internet
-        }
-      } catch (e) {
-        return; // No internet
-      }
-
-      // Internet is available, sync to server
-      await _syncAllToServer();
-    } catch (e, stack) {
-      LogService.log(
-        LogTypes.meshIncidentSync,
-        'Error checking connectivity: $e, $stack',
-      );
-    }
-  }
-
-  /// Sync all incidents to server and send confirmations to peers
-  Future<void> _syncAllToServer() async {
-    if (_isSyncingToServer) return;
-    _isSyncingToServer = true;
-
-    try {
-      final db = DBHelper();
-
-      // Get all unsynced incidents (both outgoing and incoming)
-      final outgoing = await db.getOutgoingIncidents();
-      final incoming = await db.getIncomingIncidents();
-
-      final allUnsynced = [
-        ...outgoing.where((inc) => (inc['synced'] ?? 0) == 0),
-        ...incoming, // All incoming incidents need to be synced
-      ];
-
-      if (allUnsynced.isEmpty) {
-        LogService.log(
-          LogTypes.meshIncidentSync,
-          'No incidents to sync to server',
-        );
-        return;
-      }
-
-      LogService.log(
-        LogTypes.meshIncidentSync,
-        'Syncing ${allUnsynced.length} incident(s) to server...',
-      );
-
-      final String? token = await LocalSharedPreferences.getString(
-        SharedPrefValues.token,
-      );
-
-      if (token == null) {
-        LogService.log(
-          LogTypes.meshIncidentSync,
-          'No auth token, cannot sync to server',
-        );
-        return;
-      }
-
-      final syncedIds = <String>[];
-
-      bool isSynced = false;
-      for (final incident in allUnsynced) {
-        try {
-          final apiBody = await IncidentMapper.toApiBody(incident);
-
-          final response = await http
-              .post(
-                Uri.parse(
-                  'https://disaster-response-system-1u8d.onrender.com/api/incidents',
-                ),
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': 'Bearer $token',
-                },
-                body: jsonEncode(apiBody),
-              )
-              .timeout(const Duration(seconds: 30));
-
-          if (response.statusCode == 201) {
-            isSynced = true;
-
-            final incidentId = (incident['localId'] ?? incident['remoteId'])
-                .toString();
-            syncedIds.add(incidentId);
-
-            // Mark as synced to server (so we don't keep re-sending it)
-            _syncedToServer.add(incidentId);
-
-            // Mark as synced in database if it's outgoing
-            if (incident.containsKey('id')) {
-              await db.markReportAsSynced(incident['id'] as int);
-            }
-
-            LogService.log(
-              LogTypes.meshIncidentSync,
-              'Synced incident $incidentId to server successfully',
-            );
-          }
-        } catch (e) {
-          LogService.log(
-            LogTypes.meshIncidentSync,
-            'Failed to sync incident: $e',
-          );
-        }
-      }
-
-      if (isSynced) {
-        isSynced = false;
-        LogService.log(
-          LogTypes.meshIncidentSync,
-          '✅ Synced ${syncedIds.length} incident(s) to server successfully',
-        );
-      }
-
-      // Send confirmation messages to all peers
-      if (syncedIds.isNotEmpty && _transportManager != null) {
-        await _sendConfirmationsToPeers(syncedIds);
-      }
-
-      LogService.log(
-        LogTypes.meshIncidentSync,
-        '✅ Synced ${syncedIds.length} incident(s) to server',
-      );
-    } catch (e, stack) {
-      LogService.log(
-        LogTypes.meshIncidentSync,
-        'Error syncing to server: $e, $stack',
-      );
-    } finally {
-      _isSyncingToServer = false;
-    }
-  }
-
-  /// Send confirmation messages to all peers that help is on the way
-  Future<void> _sendConfirmationsToPeers(List<String> incidentIds) async {
+  /// Broadcast received confirmation to stop other devices from broadcasting
+  Future<void> _broadcastReceivedConfirmation(
+    String incidentId, {
+    String? excludePeerId,
+  }) async {
     if (_transportManager == null) return;
 
-    final peers = _transportManager!.connectedPeers;
+    final peers = _transportManager!.connectedPeers
+        .where((p) => p.id != excludePeerId)
+        .toList();
+
     if (peers.isEmpty) return;
 
-    LogService.log(
-      LogTypes.meshIncidentSync,
-      'Sending confirmations to peers...',
-    );
+    try {
+      final payload = GossipPayload.confirmation(
+        incidentId,
+        'RECEIVED_BY_OWNER',
+      );
+      final message = GossipMessage(
+        id: _generateUuid(),
+        originId: _getDeviceId(),
+        payload: payload,
+        hops: 0,
+        ttl: 24,
+        timestamp: DateTime.now(),
+      );
 
-    for (final incidentId in incidentIds) {
       for (final peer in peers) {
         try {
-          final payload = GossipPayload.confirmation(
-            incidentId,
-            'HELP_ON_THE_WAY',
-          );
-          final message = GossipMessage(
-            id: _generateUuid(),
-            originId: _getDeviceId(),
-            payload: payload,
-            hops: 0,
-            ttl: 24,
-            timestamp: DateTime.now(),
-          );
-
           await _transportManager!.sendMessage(peer, message);
           await Future.delayed(const Duration(milliseconds: 50));
         } catch (e) {
           LogService.log(
             LogTypes.meshIncidentSync,
-            'Failed to send confirmation for $incidentId to ${peer.id}: $e',
+            'Failed to broadcast confirmation for $incidentId to ${peer.id}: $e',
           );
         }
       }
+    } catch (e, stack) {
+      LogService.log(
+        LogTypes.meshIncidentSync,
+        'Error broadcasting confirmation: $e, $stack',
+      );
     }
   }
+
 
   /// Clean up tracking for disconnected peer
   void _handlePeerDisconnected(Peer peer) {
@@ -643,16 +549,66 @@ class MeshIncidentSyncService {
     );
   }
 
+  /// Periodic cleanup of non-owned data to reduce storage
+  Timer? _cleanupTimer;
+
+  /// Manually trigger cleanup (can be called from UI)
+  Future<Map<String, int>> performManualCleanup() async {
+    await _performCleanup();
+    final db = DBHelper();
+    return await db.getStorageStats();
+  }
+
+  /// Start periodic cleanup of data that doesn't belong to this device
+  void _startPeriodicCleanup() {
+    // Run cleanup every 30 minutes
+    _cleanupTimer = Timer.periodic(
+      const Duration(minutes: 30),
+      (_) => _performCleanup(),
+    );
+    
+    // Also run initial cleanup after 5 minutes
+    Future.delayed(const Duration(minutes: 5), () => _performCleanup());
+  }
+
+  /// Perform cleanup of non-owned data
+  Future<void> _performCleanup() async {
+    try {
+      final db = DBHelper();
+      final results = await db.cleanupNonOwnedData(
+        hashMsgsDays: 7,        // Keep hash messages for 7 days
+        receivedIncidentsDays: 1, // Remove received incidents after 1 day
+        oldIncidentsDays: 3,     // Remove old unreceived incidents after 3 days
+        deliveredMsgsDays: 1,    // Remove delivered relay messages after 1 day
+        oldNonUserMsgsDays: 3,   // Remove old non-user messages after 3 days
+      );
+
+      final totalRemoved = results.values.fold(0, (sum, count) => sum + count);
+      if (totalRemoved > 0) {
+        LogService.log(
+          LogTypes.meshIncidentSync,
+          'Cleanup completed: Removed $totalRemoved items (hashMsgs: ${results['hashMsgs']}, '
+          'receivedIncidents: ${results['receivedIncidents']}, oldIncidents: ${results['oldIncidents']}, '
+          'deliveredMsgs: ${results['deliveredMsgs']}, oldNonUserMsgs: ${results['oldNonUserMsgs']})',
+        );
+      }
+    } catch (e, stack) {
+      LogService.log(
+        LogTypes.meshIncidentSync,
+        'Error during cleanup: $e, $stack',
+      );
+    }
+  }
+
   /// Dispose and cleanup
   Future<void> dispose() async {
     _messageSubscription?.cancel();
     _peerSubscription?.cancel();
     _peerDisconnectedSubscription?.cancel();
-    _connectivitySubscription?.cancel();
     _periodicSyncTimer?.cancel();
-    _serverSyncTimer?.cancel();
+    _cleanupTimer?.cancel();
     _sentToPeers.clear();
-    _syncedToServer.clear();
+    _receivedByOwner.clear();
     _isInitialized = false;
     LogService.log(LogTypes.meshIncidentSync, 'Service disposed');
   }
@@ -668,5 +624,22 @@ class MeshIncidentSyncService {
 
   String _generateIncidentId(Map<String, dynamic> data) {
     return '${data['type']}_${data['latitude']}_${data['longitude']}_${data['reportedAt']}';
+  }
+
+  Future<String?> _getMyUserId() async {
+    // Get user ID from shared preferences
+    // This should match how userId is stored when creating incidents
+    try {
+      final db = DBHelper();
+      // Get outgoing incidents to find our userId
+      final outgoing = await db.getOutgoingIncidents();
+      if (outgoing.isNotEmpty) {
+        // Return the userId from our own incidents
+        return outgoing.first['userId'] as String?;
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
   }
 }

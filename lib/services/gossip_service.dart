@@ -7,10 +7,6 @@ import '../core/connection-logic/gossip/gossip_config.dart';
 import '../core/connection-logic/gossip/gossip_payload.dart';
 import '../core/connection-logic/storage/gossip_storage_impl.dart';
 import '../core/connection-logic/transport/transport_manager.dart';
-import '../core/connection-logic/network/network_detector.dart';
-import '../core/connection-logic/network/api_client.dart';
-import '../core/connection-logic/sync/sync_manager.dart';
-import '../core/connection-logic/storage/repositories/form_repository.dart';
 import '../core/connection-logic/gossip/gossip_message.dart';
 import '../core/connection-logic/gossip/peer.dart';
 import 'mesh_incident_sync_service.dart';
@@ -19,9 +15,6 @@ class GossipService {
   late final GossipProtocol gossip;
   late final GossipStorageImpl storage;
   late final TransportManager transportManager;
-  late final SyncManager syncManager;
-  late final NetworkDetector networkDetector;
-  late final ApiClient apiClient;
 
   // Singleton pattern
   static final GossipService _instance = GossipService._internal();
@@ -33,19 +26,9 @@ class GossipService {
     storage = GossipStorageImpl();
     await storage.initialize();
 
-    // Initialize transport manager (handles Bluetooth/WiFi)
+    // Initialize transport manager (handles Bluetooth mesh)
     transportManager = TransportManager();
     await transportManager.initialize();
-
-    // Initialize network detector
-    networkDetector = NetworkDetector();
-    // await networkDetector.initialize(); // Assuming it might not need async init in current impl, checking...
-    // Actually, checked NetworkDetector source previously? Not explicitly.
-    // But typical pattern in this project is async init.
-    // If it fails, I'll catch it. SyncManager uses it in constructor.
-
-    // Initialize API client
-    apiClient = ApiClient();
 
     // Initialize gossip protocol with optimized config
     // Use default config (fanout=3, interval=30s) for balanced performance
@@ -61,16 +44,6 @@ class GossipService {
       LogTypes.gossipService,
       'GossipService initialized with optimized gossip (fanout=${GossipConfig.defaultConfig.gossipFanout})',
     );
-
-    // Initialize sync manager
-    syncManager = SyncManager(
-      storage: storage,
-      networkDetector: networkDetector,
-      apiClient: apiClient,
-      formRepository: FormRepository(),
-      gossipProtocol: gossip,
-    );
-    await syncManager.initialize();
 
     // Initialize mesh incident sync service
     await MeshIncidentSyncService().initialize(transportManager);
@@ -122,8 +95,6 @@ class GossipService {
   Future<void> dispose() async {
     await MeshIncidentSyncService().dispose();
     gossip.dispose(); // gossip uses dispose(), not stop()
-    await syncManager.dispose();
-    // transportManager.dispose(); // TransportManager has disconnect
     await transportManager.disconnect();
   }
 

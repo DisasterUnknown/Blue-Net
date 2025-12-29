@@ -26,7 +26,10 @@ class LogService {
       final logLine = "[$timestamp] [${tag.displayName}]: $message\n\n";
       _logFile!.writeAsStringSync(logLine, mode: FileMode.append, flush: true);
       _trimFileIfNeeded();
-      debugPrint(logLine);
+      // Only print to console in debug mode
+      if (kDebugMode) {
+        debugPrint(logLine.trim());
+      }
     } catch (e) {
       LogService.log(LogTypes.error, 'Error writing log: $e');
       
@@ -85,7 +88,6 @@ class LogService {
     if (_logFile == null || !_logFile!.existsSync()) return;
     try {
       await _logFile!.writeAsString('', flush: true);
-      debugPrint('All logs cleared.');
       LogService.log(LogTypes.success, "Log file cleared.");
     } catch (e) {
       LogService.log(LogTypes.error, 'Error clearing log file: $e');

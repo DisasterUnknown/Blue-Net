@@ -9,18 +9,9 @@ class AppConstants {
   static const String bluetoothCharacteristicUuid =
       '00001235-0000-1000-8000-00805f9b34fb';
 
-  // WiFi Direct
-  static const String wifiDirectServiceName = 'GossipMeshNetwork';
-
   // Database
   static const String databaseName = 'gossip_mesh.db';
   static const int databaseVersion = 1;
-
-  // Network
-  static const String apiBaseUrl =
-      'https://disaster-response-system-1u8d.onrender.com';
-  static const Duration connectionTimeout = Duration(seconds: 30);
-  static const Duration requestTimeout = Duration(seconds: 30);
 
   // Gossip
   static const Duration peerStaleThreshold = Duration(minutes: 5);

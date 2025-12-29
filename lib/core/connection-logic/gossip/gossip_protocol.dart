@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
-import 'package:flutter/widgets.dart';
+import '../../../../services/log_service.dart';
+import '../../../../core/enums/logs_enums.dart';
 
 import '../storage/gossip_storage_impl.dart';
 import '../transport/transport_manager.dart';
@@ -57,7 +58,10 @@ class GossipProtocol {
       _processBatchedGossip();
     });
 
-    debugPrint('[GossipProtocol] Initialized with fanout=${_config.gossipFanout}, interval=${_config.gossipInterval.inSeconds}s');
+    LogService.log(
+      LogTypes.gossipProtocol,
+      'GossipProtocol initialized successfully - Fanout: ${_config.gossipFanout}, Interval: ${_config.gossipInterval.inSeconds}s, TTL: ${_config.ttlHours}h, MaxHops: ${_config.maxHops}',
+    );
   }
 
   final _messageStreamController = StreamController<GossipMessage>.broadcast();
@@ -70,7 +74,19 @@ class GossipProtocol {
     // 1. Mark peer as active
     await _storage.savePeer(sender..lastSeen = DateTime.now());
 
-    // 2. Check if we've seen this message
+    // 2. Check if this is a confirmation message - don't gossip these, just process
+    if (message.payload.type == PayloadType.confirmation) {
+      // Confirmations are handled by MeshIncidentSyncService
+      // We just notify listeners but don't gossip confirmations
+      _messageStreamController.add(message);
+      LogService.log(
+        LogTypes.gossipProtocol,
+        'Received confirmation message ${message.id} from peer ${sender.id} - stopping gossip propagation',
+      );
+      return;
+    }
+
+    // 3. Check if we've seen this message
     final seenIds = await _storage.getSeenMessageIds();
     if (seenIds.contains(message.id)) {
       // Track convergence even for duplicates
@@ -78,7 +94,7 @@ class GossipProtocol {
       return; // Already seen, ignore
     }
 
-    // 3. Mark as seen and save
+    // 4. Mark as seen and save
     await _storage.markAsSeen(message.id);
     _trackMessageReceipt(message.id, sender.id);
 
@@ -88,13 +104,17 @@ class GossipProtocol {
       await _storage.savePendingMessage(message);
     }
 
-    // 4. Notify app listeners
+    // 5. Notify app listeners
     _messageStreamController.add(message);
-    debugPrint('Received new gossip message: ${message.id} from ${sender.id}');
+    LogService.log(
+      LogTypes.gossipProtocol,
+      'Received new gossip message ${message.id} (type: ${message.payload.type}) from peer ${sender.id}, hops: ${message.hops}, TTL: ${message.ttl}h',
+    );
 
-    // 5. Add to batched gossip queue (OPTIMIZED: don't gossip immediately)
-    // Urgent messages (formSubmission) get priority
-    if (message.payload.type == PayloadType.formSubmission) {
+    // 6. Add to batched gossip queue (OPTIMIZED: don't gossip immediately)
+    // Urgent messages (formSubmission, incidentData) get priority
+    if (message.payload.type == PayloadType.formSubmission ||
+        message.payload.type == PayloadType.incidentData) {
       _pendingGossip.insert(0, message); // Priority queue
       // For urgent messages, gossip immediately instead of waiting for batch
       await _gossipMessageOptimized(message, excludePeerId: sender.id);
@@ -109,18 +129,39 @@ class GossipProtocol {
     // Store-and-Carry: Send all our pending (carried) messages to this new peer
     final pendingMessages = await _storage.getPendingMessages();
     if (pendingMessages.isNotEmpty) {
-      debugPrint('Discovered ${peer.id}, syncing ${pendingMessages.length} carried messages...');
+      LogService.log(
+        LogTypes.gossipProtocol,
+        'Peer ${peer.id} discovered - syncing ${pendingMessages.length} carried message(s) via store-and-carry',
+      );
       for (final message in pendingMessages) {
-        if (message.isExpired()) continue;
+        if (message.isExpired()) {
+          LogService.log(
+            LogTypes.gossipProtocol,
+            'Skipping expired message ${message.id} for peer ${peer.id}',
+          );
+          continue;
+        }
         
         try {
           // Small delay to prevent flooding connection setup
           await Future.delayed(Duration(milliseconds: 50));
           await _transport.sendMessage(peer, message);
+          LogService.log(
+            LogTypes.gossipProtocol,
+            'Successfully synced carried message ${message.id} to peer ${peer.id}',
+          );
         } catch (e) {
-          debugPrint('Failed to sync carried message to ${peer.id}: $e');
+          LogService.log(
+            LogTypes.gossipProtocol,
+            'Failed to sync carried message ${message.id} to peer ${peer.id}: $e',
+          );
         }
       }
+    } else {
+      LogService.log(
+        LogTypes.gossipProtocol,
+        'Peer ${peer.id} discovered - no pending messages to sync',
+      );
     }
   }
 
@@ -132,7 +173,18 @@ class GossipProtocol {
 
   /// OPTIMIZED GOSSIP: Uses fanout limiting and weighted random selection
   /// Based on Boyd et al. "Randomized Gossip Algorithms"
+  /// IMPORTANT: Confirmation messages are handled separately and not gossiped
   Future<void> _gossipMessageOptimized(GossipMessage message, {String? excludePeerId}) async {
+    // Check if this is a confirmation message - don't gossip these
+    // Confirmations are handled by MeshIncidentSyncService and stop gossip propagation
+    if (message.payload.type == PayloadType.confirmation) {
+      LogService.log(
+        LogTypes.gossipProtocol,
+        'Skipping gossip for confirmation message ${message.id} - confirmations are not gossiped',
+      );
+      return;
+    }
+
     final peers = await _storage.getActivePeers(_peerStaleThreshold);
 
     // Filter out critical battery and excluded peer
@@ -141,7 +193,10 @@ class GossipProtocol {
         .toList();
 
     if (candidatePeers.isEmpty) {
-      debugPrint('[GossipProtocol] No candidate peers for message ${message.id}');
+      LogService.log(
+        LogTypes.gossipProtocol,
+        'No candidate peers available for message ${message.id} - all peers have low battery or excluded',
+      );
       return;
     }
 
@@ -151,19 +206,35 @@ class GossipProtocol {
       _config.gossipFanout,
     );
 
-    debugPrint(
-      '[GossipProtocol] Gossiping message ${message.id} to ${selectedPeers.length} peers (of ${candidatePeers.length} available) - Fanout=${_config.gossipFanout}',
+    LogService.log(
+      LogTypes.gossipProtocol,
+      'Gossiping message ${message.id} to ${selectedPeers.length} peer(s) (selected from ${candidatePeers.length} candidates, fanout=${_config.gossipFanout})',
     );
 
     // Send to selected peers
+    int successCount = 0;
     for (final peer in selectedPeers) {
       try {
         await _transport.sendMessage(peer, message);
         _trackMessageReceipt(message.id, peer.id);
-        debugPrint('  → Sent to ${peer.id} (weight: ${_calculatePeerWeight(peer).toStringAsFixed(2)})');
+        successCount++;
+        LogService.log(
+          LogTypes.gossipProtocol,
+          'Successfully sent message ${message.id} to peer ${peer.id} (weight: ${_calculatePeerWeight(peer).toStringAsFixed(2)}, battery: ${peer.batteryLevel}%)',
+        );
       } catch (e) {
-        debugPrint('  ✗ Failed to send to ${peer.id}: $e');
+        LogService.log(
+          LogTypes.gossipProtocol,
+          'Failed to send message ${message.id} to peer ${peer.id}: $e',
+        );
       }
+    }
+    
+    if (successCount > 0) {
+      LogService.log(
+        LogTypes.gossipProtocol,
+        'Message ${message.id} gossiped successfully to $successCount/${selectedPeers.length} peer(s)',
+      );
     }
   }
 
@@ -212,11 +283,6 @@ class GossipProtocol {
   double _calculatePeerWeight(Peer peer) {
     double weight = 1.0;
 
-    // Internet access: 3x weight (highest priority)
-    if (peer.hasInternet) {
-      weight *= 3.0;
-    }
-
     // Battery level: 0.5x to 2x weight
     // Low battery (15-30%) = 0.5x
     // Medium battery (30-70%) = 1.0x
@@ -250,7 +316,10 @@ class GossipProtocol {
       uniqueMessages[msg.id] = msg;
     }
 
-    debugPrint('[GossipProtocol] Processing ${uniqueMessages.length} batched messages');
+    LogService.log(
+      LogTypes.gossipProtocol,
+      'Processing ${uniqueMessages.length} batched message(s) from queue',
+    );
 
     // Process each unique message
     for (final message in uniqueMessages.values) {

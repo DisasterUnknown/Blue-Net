@@ -1,5 +1,6 @@
 import 'dart:io';
-import 'package:flutter/foundation.dart';
+import 'package:bluetooth_chat_app/core/enums/logs_enums.dart';
+import 'package:bluetooth_chat_app/services/log_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class PermissionHandlerService {
@@ -22,7 +23,15 @@ class PermissionHandlerService {
 
       // 3. Check if crucial ones are granted
       if (statuses[Permission.bluetoothConnect]?.isDenied ?? false) {
-        debugPrint("Bluetooth Connect permission denied");
+        LogService.log(
+          LogTypes.permissionHandler,
+          'Bluetooth Connect permission denied - mesh functionality may be limited',
+        );
+      } else {
+        LogService.log(
+          LogTypes.permissionHandler,
+          'Bluetooth permissions granted successfully',
+        );
       }
     }
   }

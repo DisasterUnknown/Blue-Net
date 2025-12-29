@@ -23,7 +23,7 @@ class DBHelper {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, 'bluetooth_chat.db');
 
-    return await openDatabase(path, version: 1, onCreate: _onCreate);
+    return await openDatabase(path, version: 2, onCreate: _onCreate, onUpgrade: _onUpgrade);
   }
 
   Future _onCreate(Database db, int version) async {
@@ -58,6 +58,95 @@ class DBHelper {
         seenDate DATETIME
       )
     ''');
+
+    // Incident reports - incoming (received from other devices)
+    await db.execute('''
+      CREATE TABLE incident_reports_incoming(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        remoteId TEXT UNIQUE NOT NULL,
+        type TEXT NOT NULL,
+        riskLevel INTEGER DEFAULT 3,
+        latitude REAL,
+        longitude REAL,
+        reportedAt TEXT NOT NULL,
+        receivedAt TEXT NOT NULL,
+        photoPath TEXT,
+        description TEXT,
+        userId TEXT,
+        uniqueId TEXT,
+        isReceived INTEGER DEFAULT 0,
+        synced INTEGER DEFAULT 0
+      )
+    ''');
+
+    // Incident reports - outgoing (created by this device)
+    await db.execute('''
+      CREATE TABLE incident_reports_outgoing(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        localId TEXT UNIQUE NOT NULL,
+        type TEXT NOT NULL,
+        riskLevel INTEGER DEFAULT 3,
+        latitude REAL,
+        longitude REAL,
+        reportedAt TEXT NOT NULL,
+        photoPath TEXT,
+        description TEXT,
+        userId TEXT,
+        uniqueId TEXT,
+        synced INTEGER DEFAULT 0
+      )
+    ''');
+
+    // Create indexes for better performance
+    await db.execute('CREATE INDEX idx_incoming_remoteId ON incident_reports_incoming(remoteId)');
+    await db.execute('CREATE INDEX idx_outgoing_localId ON incident_reports_outgoing(localId)');
+    await db.execute('CREATE INDEX idx_incoming_received ON incident_reports_incoming(isReceived)');
+  }
+
+  Future _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      // Add incident tables if they don't exist
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS incident_reports_incoming(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          remoteId TEXT UNIQUE NOT NULL,
+          type TEXT NOT NULL,
+          riskLevel INTEGER DEFAULT 3,
+          latitude REAL,
+          longitude REAL,
+          reportedAt TEXT NOT NULL,
+          receivedAt TEXT NOT NULL,
+          photoPath TEXT,
+          description TEXT,
+          userId TEXT,
+          uniqueId TEXT,
+          isReceived INTEGER DEFAULT 0,
+          synced INTEGER DEFAULT 0
+        )
+      ''');
+
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS incident_reports_outgoing(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          localId TEXT UNIQUE NOT NULL,
+          type TEXT NOT NULL,
+          riskLevel INTEGER DEFAULT 3,
+          latitude REAL,
+          longitude REAL,
+          reportedAt TEXT NOT NULL,
+          photoPath TEXT,
+          description TEXT,
+          userId TEXT,
+          uniqueId TEXT,
+          synced INTEGER DEFAULT 0
+        )
+      ''');
+
+      // Create indexes
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_incoming_remoteId ON incident_reports_incoming(remoteId)');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_outgoing_localId ON incident_reports_outgoing(localId)');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_incoming_received ON incident_reports_incoming(isReceived)');
+    }
   }
 
   // ===================== USERS =====================
@@ -103,6 +192,48 @@ class DBHelper {
 
   Future<int> insertIncomingIncident(Map<String, dynamic> data) async {
     final database = await db;
+    
+    // Check for duplicate by remoteId
+    final remoteId = data['remoteId'] as String?;
+    if (remoteId != null) {
+      // Check in incoming incidents
+      final existingIncoming = await database.query(
+        'incident_reports_incoming',
+        where: 'remoteId = ?',
+        whereArgs: [remoteId],
+      );
+      
+      // Also check in outgoing incidents (in case this is our own incident being relayed back)
+      final existingOutgoing = await database.query(
+        'incident_reports_outgoing',
+        where: 'localId = ?',
+        whereArgs: [remoteId],
+      );
+      
+      if (existingIncoming.isNotEmpty) {
+        // Update existing incoming record instead of inserting duplicate
+        await database.update(
+          'incident_reports_incoming',
+          {
+            ...data,
+            'description': data['description'] ?? null,
+            'receivedAt': DateTime.now().toIso8601String(),
+            // Preserve isReceived status if already set
+            'isReceived': existingIncoming.first['isReceived'] ?? data['isReceived'] ?? 0,
+          },
+          where: 'remoteId = ?',
+          whereArgs: [remoteId],
+        );
+        return existingIncoming.first['id'] as int;
+      }
+      
+      if (existingOutgoing.isNotEmpty) {
+        // This is our own incident being relayed back - don't insert as incoming
+        // Just update the outgoing record if needed
+        return existingOutgoing.first['id'] as int;
+      }
+    }
+    
     final id = await database.insert(
       'incident_reports_incoming',
       {
@@ -110,10 +241,46 @@ class DBHelper {
         'description': data['description'] ?? null,
         'receivedAt': DateTime.now().toIso8601String(),
       },
-      conflictAlgorithm: ConflictAlgorithm.ignore, // prevents duplicates
+      conflictAlgorithm: ConflictAlgorithm.replace, // Replace on conflict
     );
     incomingCountNotifier.value++;
     return id;
+  }
+
+  Future<void> markIncidentAsReceived(String incidentId) async {
+    final database = await db;
+    // Update incoming incidents
+    await database.update(
+      'incident_reports_incoming',
+      {'isReceived': 1},
+      where: 'remoteId = ?',
+      whereArgs: [incidentId],
+    );
+    // Also check and update outgoing incidents if this is our own incident
+    await database.update(
+      'incident_reports_outgoing',
+      {'synced': 1}, // Mark as synced/received
+      where: 'localId = ?',
+      whereArgs: [incidentId],
+    );
+  }
+
+  Future<bool> isIncidentReceived(String incidentId) async {
+    final database = await db;
+    // Check both incoming and outgoing
+    final incoming = await database.query(
+      'incident_reports_incoming',
+      where: 'remoteId = ? AND isReceived = 1',
+      whereArgs: [incidentId],
+    );
+    if (incoming.isNotEmpty) return true;
+    
+    final outgoing = await database.query(
+      'incident_reports_outgoing',
+      where: 'localId = ?',
+      whereArgs: [incidentId],
+    );
+    return outgoing.isNotEmpty;
   }
 
   Future<void> markReportAsSynced(int id) async {
@@ -351,6 +518,141 @@ class DBHelper {
       where: 'receiveDate <= ?',
       whereArgs: [cutoff],
     );
+  }
+
+  /// Remove old hash messages (seen message IDs) older than specified days
+  /// These are used for deduplication and can be safely removed after a period
+  Future<int> removeOldHashMsgs({int olderThanDays = 7}) async {
+    final database = await db;
+    final cutoff = DateTime.now()
+        .subtract(Duration(days: olderThanDays))
+        .toIso8601String();
+    return await database.delete(
+      'hashMsgs',
+      where: 'seenDate <= ?',
+      whereArgs: [cutoff],
+    );
+  }
+
+  /// Remove incoming incidents that have been received by owner
+  /// These are incidents we carried but don't belong to us
+  Future<int> removeReceivedIncomingIncidents({int olderThanDays = 1}) async {
+    final database = await db;
+    final cutoff = DateTime.now()
+        .subtract(Duration(days: olderThanDays))
+        .toIso8601String();
+    // Remove incidents that were received by owner more than X days ago
+    return await database.delete(
+      'incident_reports_incoming',
+      where: 'isReceived = 1 AND receivedAt <= ?',
+      whereArgs: [cutoff],
+    );
+  }
+
+  /// Remove old incoming incidents that don't belong to this device
+  /// Only keep incidents that haven't been received yet (still being carried)
+  Future<int> removeOldIncomingIncidents({int olderThanDays = 3}) async {
+    final database = await db;
+    final cutoff = DateTime.now()
+        .subtract(Duration(days: olderThanDays))
+        .toIso8601String();
+    // Remove old incidents that are not received and older than cutoff
+    // These are incidents we've been carrying but are too old
+    return await database.delete(
+      'incident_reports_incoming',
+      where: 'isReceived = 0 AND receivedAt <= ?',
+      whereArgs: [cutoff],
+    );
+  }
+
+  /// Remove delivered non-user messages (relay messages that have been delivered)
+  Future<int> removeDeliveredNonUserMsgs({int olderThanDays = 1}) async {
+    final database = await db;
+    final cutoff = DateTime.now()
+        .subtract(Duration(days: olderThanDays))
+        .toIso8601String();
+    // Remove messages that have been received (delivered) and are older than cutoff
+    return await database.delete(
+      'nonUserMsgs',
+      where: 'isReceived = 1 AND receiveDate <= ?',
+      whereArgs: [cutoff],
+    );
+  }
+
+  /// Comprehensive cleanup: Remove all data that doesn't belong to this device
+  /// This helps reduce storage by removing carried/relayed data
+  Future<Map<String, int>> cleanupNonOwnedData({
+    int hashMsgsDays = 7,
+    int receivedIncidentsDays = 1,
+    int oldIncidentsDays = 3,
+    int deliveredMsgsDays = 1,
+    int oldNonUserMsgsDays = 3,
+  }) async {
+    final results = <String, int>{};
+
+    try {
+      // Remove old hash messages (seen IDs)
+      results['hashMsgs'] = await removeOldHashMsgs(olderThanDays: hashMsgsDays);
+
+      // Remove received incoming incidents (don't belong to us, already delivered)
+      results['receivedIncidents'] = await removeReceivedIncomingIncidents(
+        olderThanDays: receivedIncidentsDays,
+      );
+
+      // Remove old incoming incidents that haven't been received (too old to carry)
+      results['oldIncidents'] = await removeOldIncomingIncidents(
+        olderThanDays: oldIncidentsDays,
+      );
+
+      // Remove delivered relay messages
+      results['deliveredMsgs'] = await removeDeliveredNonUserMsgs(
+        olderThanDays: deliveredMsgsDays,
+      );
+
+      // Remove old non-user messages
+      results['oldNonUserMsgs'] = await removeOldNonUserMsgs(
+        olderThanDays: oldNonUserMsgsDays,
+      );
+
+      return results;
+    } catch (e) {
+      // Log error but don't use LogService here to avoid circular dependency
+      // Error will be logged by the calling service
+      return results;
+    }
+  }
+
+  /// Get storage statistics for monitoring
+  Future<Map<String, int>> getStorageStats() async {
+    final database = await db;
+    final stats = <String, int>{};
+
+    // Count incoming incidents
+    final incomingResult = await database.rawQuery(
+      'SELECT COUNT(*) as c FROM incident_reports_incoming',
+    );
+    stats['incomingIncidents'] = incomingResult.first['c'] as int? ?? 0;
+
+    // Count received incoming incidents
+    final receivedResult = await database.rawQuery(
+      'SELECT COUNT(*) as c FROM incident_reports_incoming WHERE isReceived = 1',
+    );
+    stats['receivedIncidents'] = receivedResult.first['c'] as int? ?? 0;
+
+    // Count outgoing incidents (our own)
+    final outgoingResult = await database.rawQuery(
+      'SELECT COUNT(*) as c FROM incident_reports_outgoing',
+    );
+    stats['outgoingIncidents'] = outgoingResult.first['c'] as int? ?? 0;
+
+    // Count hash messages
+    stats['hashMsgs'] = await countHashMsgs();
+
+    // Count non-user messages
+    stats['nonUserMsgs'] = await countNonUserMsgs();
+    stats['pendingNonUserMsgs'] = await countPendingNonUserMsgs();
+
+    return stats;
   }
 }
 

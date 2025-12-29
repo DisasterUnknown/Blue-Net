@@ -3,7 +3,6 @@ import 'dart:math';
 import 'dart:convert';
 import 'package:bluetooth_chat_app/core/enums/logs_enums.dart';
 import 'package:bluetooth_chat_app/services/log_service.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:nearby_connections/nearby_connections.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -43,7 +42,6 @@ class NearbyTransport implements GossipTransport {
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
         Permission.bluetoothAdvertise,
-        Permission.nearbyWifiDevices,
         Permission.locationWhenInUse,
         Permission.location,
       ];
@@ -58,7 +56,10 @@ class NearbyTransport implements GossipTransport {
         final missingText = missing
             .map((p) => p.toString().split('.').last)
             .join(', ');
-        debugPrint('[NearbyTransport] Missing permissions: $missingText');
+        LogService.log(
+          LogTypes.nearbyTransport,
+          'Missing required permissions for Nearby Connections: $missingText',
+        );
         LogService.log(
           LogTypes.nearbyTransport,
           'Missing permissions: $missingText',
@@ -69,7 +70,10 @@ class NearbyTransport implements GossipTransport {
       await _startAdvertising();
       await _startDiscovery();
 
-      LogService.log(LogTypes.nearbyTransport, 'Initialized');
+      LogService.log(
+        LogTypes.nearbyTransport,
+        'NearbyTransport initialized successfully - Advertising and Discovery started, Service ID: com.example.hackathon',
+      );
     } catch (e, stack) {
       _handleNearbyFailure('Initialization', e, stack);
     }
@@ -91,7 +95,10 @@ class NearbyTransport implements GossipTransport {
         },
         serviceId: 'com.example.hackathon', // Must match manifest
       );
-      LogService.log(LogTypes.nearbyTransport, 'Advertising started');
+      LogService.log(
+        LogTypes.nearbyTransport,
+        'Started advertising as server - Device name: $userName, Strategy: ${strategy.name}',
+      );
     } catch (e, stack) {
       _handleNearbyFailure('Advertising', e, stack);
     }
@@ -112,7 +119,10 @@ class NearbyTransport implements GossipTransport {
         },
         serviceId: 'com.example.hackathon',
       );
-      LogService.log(LogTypes.nearbyTransport, 'Discovery started');
+      LogService.log(
+        LogTypes.nearbyTransport,
+        'Started discovery as client - Looking for nearby devices with Service ID: com.example.hackathon',
+      );
     } catch (e, stack) {
       _handleNearbyFailure('Discovery', e, stack);
     }
@@ -121,7 +131,10 @@ class NearbyTransport implements GossipTransport {
   Future<void> _requestConnectionWithRetry(String id, {int retries = 3}) async {
     // 1. Check if already connected
     if (_connectedPeers.containsKey(id)) {
-      LogService.log(LogTypes.nearbyTransport, 'Already connected to $id');
+      LogService.log(
+        LogTypes.nearbyTransport,
+        'Already connected to peer $id - skipping connection request',
+      );
       return;
     }
 
@@ -154,7 +167,7 @@ class NearbyTransport implements GossipTransport {
             final delay = Duration(seconds: i + 1);
             LogService.log(
               LogTypes.nearbyTransport,
-              'Connection request failed (8012), retrying in ${delay.inSeconds}s...',
+              'Connection request to peer $id failed (error 8012) - Retry ${i + 1}/$retries in ${delay.inSeconds}s',
             );
             await Future.delayed(delay);
           }
@@ -174,6 +187,10 @@ class NearbyTransport implements GossipTransport {
   }
 
   void _onConnectionInitiated(String id, ConnectionInfo info) {
+    LogService.log(
+      LogTypes.nearbyTransport,
+      'Connection initiated from peer $id - Auto-accepting connection request (Endpoint name: ${info.endpointName})',
+    );
     // Auto-accept
     Nearby()
         .acceptConnection(
@@ -183,11 +200,16 @@ class NearbyTransport implements GossipTransport {
           },
         )
         .catchError((error, stack) {
+          LogService.log(
+            LogTypes.nearbyTransport,
+            'Failed to accept connection from peer $id: $error',
+          );
           _handleNearbyFailure(
             'Accept connection',
             error,
             stack is StackTrace ? stack : null,
           );
+          return Future.value(false);
         });
   }
 
@@ -196,7 +218,7 @@ class NearbyTransport implements GossipTransport {
       final peer = Peer(
         id: id,
         name: 'Peer $id',
-        transport: TransportType.wifiDirect,
+        transport: TransportType.bluetooth,
         hasInternet: false,
         signalStrength: 0,
       );
@@ -212,14 +234,17 @@ class NearbyTransport implements GossipTransport {
     final peer = _connectedPeers.remove(id);
     if (peer != null) {
       _peerDisconnectController.add(peer);
-      LogService.log(LogTypes.nearbyTransport, 'Peer ${peer.id} disconnected');
+      LogService.log(
+        LogTypes.nearbyTransport,
+        'Peer ${peer.id} disconnected - Remaining connected: ${_connectedPeers.length}',
+      );
     }
   }
 
   void _onPayloadReceived(String endpointId, Payload payload) {
     LogService.log(
       LogTypes.nearbyTransport,
-      'Received payload from $endpointId type: ${payload.type}',
+      'Received payload from peer $endpointId - Type: ${payload.type}, Size: ${payload.bytes?.length ?? 0} bytes',
     );
     if (payload.type == PayloadType.BYTES) {
       try {
@@ -229,7 +254,7 @@ class NearbyTransport implements GossipTransport {
 
         LogService.log(
           LogTypes.nearbyTransport,
-          'Parsed GossipMessage: ${message.id} type: ${message.payload.type}',
+          'Successfully parsed GossipMessage ${message.id} from peer $endpointId - Payload type: ${message.payload.type}, Hops: ${message.hops}',
         );
 
         final peer =
@@ -237,14 +262,18 @@ class NearbyTransport implements GossipTransport {
             Peer(
               id: endpointId,
               name: 'Peer $endpointId',
-              transport: TransportType.wifiDirect,
+              transport: TransportType.bluetooth,
             );
 
         _messageController.add(ReceivedMessage(message: message, peer: peer));
-      } catch (e) {
         LogService.log(
           LogTypes.nearbyTransport,
-          'Error parsing payload from $endpointId: $e',
+          'Message ${message.id} delivered to application layer from peer $endpointId',
+        );
+      } catch (e, stack) {
+        LogService.log(
+          LogTypes.nearbyTransport,
+          'Error parsing payload from peer $endpointId: $e\nStack: $stack',
         );
       }
     }
@@ -268,9 +297,13 @@ class NearbyTransport implements GossipTransport {
         await Nearby().sendBytesPayload(peer.id, Uint8List.fromList(bytes));
         LogService.log(
           LogTypes.nearbyTransport,
-          'Payload sent successfully to ${peer.id}',
+          'Successfully sent message ${message.id} (${bytes.length} bytes) to peer ${peer.id}',
         );
       } catch (e, stack) {
+        LogService.log(
+          LogTypes.nearbyTransport,
+          'Failed to send message ${message.id} to peer ${peer.id}: $e',
+        );
         _handleNearbyFailure('Send payload', e, stack);
       }
     } else {
@@ -293,12 +326,14 @@ class NearbyTransport implements GossipTransport {
     if (error is PlatformException) {
       final message = error.message ?? '';
       if (message.contains('STATUS_RADIO_ERROR')) {
-        debugPrint(
-          '[NearbyTransport] Mesh radios are unavailable. Enable Bluetooth, Nearby Devices, and Location.',
+        LogService.log(
+          LogTypes.nearbyTransport,
+          'Mesh radios unavailable - ensure Bluetooth, Nearby Devices, and Location services are enabled',
         );
       } else if (message.contains('MISSING_PERMISSION')) {
-        debugPrint(
-          '[NearbyTransport] Missing permissions for Nearby Connections.',
+        LogService.log(
+          LogTypes.nearbyTransport,
+          'Missing permissions for Nearby Connections - please grant required permissions',
         );
       }
     }

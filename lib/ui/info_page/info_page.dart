@@ -2,6 +2,9 @@ import 'package:bluetooth_chat_app/services/bluetooth_turn_on_service.dart';
 import 'package:bluetooth_chat_app/services/mesh_service.dart';
 import 'package:bluetooth_chat_app/data/data_base/db_helper.dart';
 import 'package:bluetooth_chat_app/services/uuid_service.dart';
+import 'package:bluetooth_chat_app/services/mesh_incident_sync_service.dart';
+import 'package:bluetooth_chat_app/services/gossip_service.dart';
+import 'package:bluetooth_chat_app/core/connection-logic/gossip/peer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
@@ -11,6 +14,7 @@ class InfoPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final mesh = MeshService.instance;
+    final gossipService = GossipService();
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -69,6 +73,41 @@ class InfoPage extends StatelessWidget {
             },
           ),
           const SizedBox(height: 8),
+          // Live connected devices count using StreamBuilder
+          StreamBuilder<List<Peer>>(
+            stream: gossipService.meshPeersStream,
+            builder: (context, snapshot) {
+              final connectedCount = snapshot.data?.length ?? 0;
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: CircleAvatar(
+                  backgroundColor: connectedCount > 0 
+                      ? Colors.greenAccent.withOpacity(0.3)
+                      : const Color(0xFF2A2A2A),
+                  child: Icon(
+                    Icons.devices,
+                    color: connectedCount > 0 
+                        ? Colors.greenAccent
+                        : Colors.lightBlueAccent,
+                  ),
+                ),
+                title: const Text(
+                  'Connected Peers (Live)',
+                  style: TextStyle(color: Colors.white),
+                ),
+                subtitle: Text(
+                  '$connectedCount device(s) currently connected.',
+                  style: TextStyle(
+                    color: connectedCount > 0 
+                        ? Colors.greenAccent.shade200
+                        : Colors.grey.shade400,
+                    fontSize: 12,
+                    fontWeight: connectedCount > 0 ? FontWeight.w500 : FontWeight.normal,
+                  ),
+                ),
+              );
+            },
+          ),
           ValueListenableBuilder<MeshStats>(
             valueListenable: mesh.stats,
             builder: (context, stats, _) {
@@ -77,27 +116,9 @@ class InfoPage extends StatelessWidget {
                   : 0;
               final nextCleanupStr = stats.nextCleanupTime != null
                   ? _formatTime(stats.nextCleanupTime!)
-                  : 'Scheduled ~every 10 minutes';
+                  : 'Scheduled ~every 30 minutes';
               return Column(
                 children: [
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const CircleAvatar(
-                      backgroundColor: Color(0xFF2A2A2A),
-                      child: Icon(Icons.devices, color: Colors.lightBlueAccent),
-                    ),
-                    title: const Text(
-                      'Connected Peers (this session)',
-                      style: TextStyle(color: Colors.white),
-                    ),
-                    subtitle: Text(
-                      '${stats.currentConnectedDevices} device(s) currently connected.',
-                      style: TextStyle(
-                        color: Colors.grey.shade400,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: const CircleAvatar(
@@ -303,6 +324,29 @@ class InfoPage extends StatelessWidget {
                         color: Colors.grey,
                         fontSize: 12,
                       ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      // Trigger manual cleanup
+                      final meshIncidentSync = MeshIncidentSyncService();
+                      final stats = await meshIncidentSync.performManualCleanup();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Cleanup completed. Removed old data.\n'
+                            'Stats: ${stats.toString()}',
+                          ),
+                          duration: const Duration(seconds: 3),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.cleaning_services),
+                    label: const Text('Clean Up Old Data'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.greenAccent,
+                      foregroundColor: Colors.black,
                     ),
                   ),
                 ],

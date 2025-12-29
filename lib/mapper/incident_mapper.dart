@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/material.dart';
+import 'package:bluetooth_chat_app/core/enums/logs_enums.dart';
+import 'package:bluetooth_chat_app/services/log_service.dart';
 
 class IncidentMapper {
   static Future<String?> imageFileToBase64(String? path) async {
@@ -13,7 +14,10 @@ class IncidentMapper {
       final bytes = await file.readAsBytes();
       return base64Encode(bytes);
     } catch (e) {
-      debugPrint("Something went wrong {$e}");
+      LogService.log(
+        LogTypes.error,
+        'Failed to convert image file to base64: $e',
+      );
       return null;
     }
   }

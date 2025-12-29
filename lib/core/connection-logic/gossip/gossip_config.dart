@@ -8,7 +8,6 @@ class GossipConfig {
   final int gossipFanout;
   final Duration gossipInterval;
   final bool enableBluetooth;
-  final bool enableWiFiDirect;
   final int maxPendingMessages;
   final int maxSeenMessageCache;
 
@@ -18,7 +17,6 @@ class GossipConfig {
     this.gossipFanout = 3,
     this.gossipInterval = const Duration(seconds: 30),
     this.enableBluetooth = true,
-    this.enableWiFiDirect = true,
     this.maxPendingMessages = 100,
     this.maxSeenMessageCache = 10000,
   });
@@ -43,7 +41,6 @@ class GossipConfig {
     int? gossipFanout,
     Duration? gossipInterval,
     bool? enableBluetooth,
-    bool? enableWiFiDirect,
     int? maxPendingMessages,
     int? maxSeenMessageCache,
   }) {
@@ -53,7 +50,6 @@ class GossipConfig {
       gossipFanout: gossipFanout ?? this.gossipFanout,
       gossipInterval: gossipInterval ?? this.gossipInterval,
       enableBluetooth: enableBluetooth ?? this.enableBluetooth,
-      enableWiFiDirect: enableWiFiDirect ?? this.enableWiFiDirect,
       maxPendingMessages: maxPendingMessages ?? this.maxPendingMessages,
       maxSeenMessageCache: maxSeenMessageCache ?? this.maxSeenMessageCache,
     );

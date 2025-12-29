@@ -1,13 +1,9 @@
 import 'dart:async';
 import 'dart:math';
-import 'package:bluetooth_chat_app/core/connection-logic/storage/models/form_entity.dart';
 import 'package:bluetooth_chat_app/core/enums/logs_enums.dart';
 import 'package:bluetooth_chat_app/services/log_service.dart';
-import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../storage/gossip_storage.dart';
-import '../network/network_detector.dart';
-import '../network/api_client.dart';
 import '../gossip/gossip_protocol.dart';
 import '../gossip/gossip_payload.dart';
 import '../gossip/gossip_message.dart';
@@ -45,8 +41,6 @@ class SyncState {
 
 class SyncManager {
   final GossipStorage storage;
-  final NetworkDetector networkDetector;
-  final ApiClient apiClient;
   final GossipProtocol? gossipProtocol;
   final FormRepository formRepository;
 
@@ -63,86 +57,27 @@ class SyncManager {
 
   SyncManager({
     required this.storage,
-    required this.networkDetector,
-    required this.apiClient,
     required this.formRepository,
     this.gossipProtocol,
   });
 
   Future<void> initialize() async {
-    // Start periodic sync check
+    // Start periodic sync check (gossip only, no server sync)
     _periodicSyncTimer = Timer.periodic(Duration(minutes: 5), (_) {
       attemptSync();
     });
 
-    // Listen to network changes
-    networkDetector.connectionStream.listen((connectionType) {
-      if (connectionType == ConnectionType.wifi ||
-          connectionType == ConnectionType.cellular) {
-        LogService.log(
-          LogTypes.syncManager,
-          'Internet connection detected, attempting sync',
-        );
-        attemptSync();
-      }
-    });
-
-    // Listen to gossip messages
+    // Listen to gossip messages for confirmations
     if (gossipProtocol != null) {
       gossipProtocol!.onMessage.listen((message) async {
-        if (message.payload.type == PayloadType.formSubmission) {
-          debugPrint('Received gossiped form submission: ${message.id}');
-          final hasInternet = await networkDetector.hasInternet();
-          if (hasInternet) {
-            LogService.log(LogTypes.syncManager, 'Received form via gossip');
-            try {
-              final formData = message.payload.data;
-              await apiClient.submitForm(formData);
-              LogService.log(
-                LogTypes.syncManager,
-                'Gossiped form ${formData['id']} submitted successfully to server',
-              );
-
-              // Broadcast confirmation
-              final confirmation = GossipPayload.confirmation(
-                formData['id'],
-                'SUCCESS',
-              );
-              final confMsg = GossipMessage(
-                id: _generateUuid(),
-                originId: _localPeerId,
-                payload: confirmation,
-                hops: 0,
-                ttl: 24,
-                timestamp: DateTime.now(),
-              );
-              await gossipProtocol!.broadcastMessage(confMsg);
-            } catch (e) {
-              LogService.log(
-                LogTypes.error,
-                'Failed to submit gossiped form: $e',
-              );
-            }
-          }
-        } else if (message.payload.type == PayloadType.confirmation) {
-          final formId = message
-              .payload
-              .data['form_id']; // This is likely the localId or UUID
-          // If we have this form as pending, mark it as synced!
-          try {
-            // We need to find the report with this ID (assuming formId maps to localId or we need to check)
-            // DBHelper uses int ID for local, but localId (String) for UUID.
-            // Assuming formId is the UUID (localId).
-            // But DBHelper.markReportAsSynced takes int ID.
-            // We might need to look it up.
-            // For now, skipping complex lookup as DBHelper doesn't expose getByLocalId easily without query.
-            LogService.log(
-              LogTypes.syncManager,
-              'Received confirmation for $formId. (Sync marking not fully implemented for gossip confirmation yet)',
-            );
-          } catch (_) {
-            // Probably don't have this form or it's already synced
-          }
+        if (message.payload.type == PayloadType.confirmation) {
+          final formId = message.payload.data['form_id'] ?? 
+                         message.payload.data['incident_id'] ??
+                         message.payload.data['incidentId'];
+          LogService.log(
+            LogTypes.syncManager,
+            'Received confirmation for $formId via gossip',
+          );
         }
       });
     }
@@ -169,142 +104,65 @@ class SyncManager {
         return;
       }
 
-      // Check if we have internet
-      final hasInternet = await networkDetector.hasInternet();
+      // Check if Bluetooth enabled (Permissions check as proxy for enabled state)
+      bool locationGranted = await Permission.location.isGranted;
+      bool bluetoothGranted =
+          await Permission.bluetoothAdvertise.isGranted ||
+          await Permission.bluetoothConnect.isGranted;
 
-      if (!hasInternet) {
-        LogService.log(LogTypes.syncManager, 'No internet connection');
-
-        // Check if WiFi/Bluetooth enabled (Permissions check as proxy for enabled state check availability)
-        bool locationGranted = await Permission.location.isGranted;
-        bool bluetoothGranted =
-            await Permission.bluetoothAdvertise.isGranted ||
-            await Permission.bluetoothConnect.isGranted;
-
-        if (!locationGranted || !bluetoothGranted) {
-          LogService.log(LogTypes.syncManager,
-              'Missing permissions for gossip (Location: $locationGranted, Bluetooth: $bluetoothGranted). Aborting gossip.');
-          _updateState(_currentState.copyWith(status: SyncStatus.idle));
-          return;
-        }
-
-        LogService.log(
-          LogTypes.syncManager,
-          'Attempting to gossip ${pendingForms.length} forms',
-        );
-
-        if (gossipProtocol != null) {
-          int gossipedCount = 0;
-          for (final form in pendingForms) {
-            try {
-              final payload = GossipPayload.formSubmission(form);
-              final message = GossipMessage(
-                id: _generateUuid(),
-                originId: _localPeerId,
-                payload: payload,
-                hops: 0,
-                ttl: 24, // 24 hours
-                timestamp: DateTime.now(),
-              );
-
-              await gossipProtocol!.broadcastMessage(message);
-              gossipedCount++;
-            } catch (e) {
-              LogService.log(
-                LogTypes.syncManager,
-                'Failed to gossip form ${form['id']}',
-              );
-            }
-          }
-          LogService.log(
-            LogTypes.syncManager,
-            'Gossiped $gossipedCount forms via gossip protocol',
-          );
-          if (gossipedCount > 0) {
-            debugPrint(
-              'Gossiped $gossipedCount forms via Bluetooth/WiFi Direct.',
-            );
-          }
-        } else {
-          LogService.log(
-            LogTypes.syncManager,
-            'GossipProtocol not available, cannot gossip.',
-          );
-        }
-
+      if (!locationGranted || !bluetoothGranted) {
+        LogService.log(LogTypes.syncManager,
+            'Missing permissions for gossip (Location: $locationGranted, Bluetooth: $bluetoothGranted). Aborting gossip.');
         _updateState(_currentState.copyWith(status: SyncStatus.idle));
         return;
       }
 
-      // We have internet, proceed with upload
       LogService.log(
         LogTypes.syncManager,
-        'Syncing ${pendingForms.length} forms via Internet',
+        'Attempting to gossip ${pendingForms.length} forms via Bluetooth mesh',
       );
 
-      int successCount = 0;
-      int errorCount = 0;
-
-      for (final form in pendingForms) {
-        try {
-          // Upload to server
-          await apiClient.submitForm(form);
-
-          // Mark as synced
-          await formRepository.updateStatus(
-            form['id'],
-            FormStatus.synced,
-            syncedAt: DateTime.now(),
-          );
-
-          successCount++;
-
-          // Broadcast confirmation via gossip
-          if (gossipProtocol != null) {
-            final payload = GossipPayload.confirmation(
-              (form['localId'] ?? form['id']).toString(),
-              'SUCCESS',
-            );
+      if (gossipProtocol != null) {
+        int gossipedCount = 0;
+        for (final form in pendingForms) {
+          try {
+            final payload = GossipPayload.formSubmission(form);
             final message = GossipMessage(
               id: _generateUuid(),
               originId: _localPeerId,
               payload: payload,
               hops: 0,
-              ttl: 24,
+              ttl: 24, // 24 hours
               timestamp: DateTime.now(),
             );
+
             await gossipProtocol!.broadcastMessage(message);
+            gossipedCount++;
+          } catch (e) {
+            LogService.log(
+              LogTypes.syncManager,
+              'Failed to gossip form ${form['id']}',
+            );
           }
-
-          LogService.log(
-            LogTypes.syncManager,
-            'Form ${form['id']} synced successfully',
-          );
-        } catch (e) {
-          errorCount++;
-          // await formRepository.incrementAttempts(form.id); // DBHelper doesn't have attempts column yet
-          LogService.log(
-            LogTypes.syncManager,
-            'Failed to sync form ${form['id']}'
-          );
         }
+        LogService.log(
+          LogTypes.syncManager,
+          'Gossiped $gossipedCount forms via Bluetooth mesh',
+        );
+        
+        _updateState(
+          _currentState.copyWith(
+            status: gossipedCount > 0 ? SyncStatus.success : SyncStatus.idle,
+            syncedCount: gossipedCount,
+          ),
+        );
+      } else {
+        LogService.log(
+          LogTypes.syncManager,
+          'GossipProtocol not available, cannot gossip.',
+        );
+        _updateState(_currentState.copyWith(status: SyncStatus.idle));
       }
-
-      _updateState(
-        _currentState.copyWith(
-          status: successCount > 0 ? SyncStatus.success : SyncStatus.error,
-          pendingCount: pendingForms.length - successCount,
-          syncedCount: successCount,
-          errorMessage: errorCount > 0
-              ? '$errorCount forms failed to sync'
-              : null,
-        ),
-      );
-
-      LogService.log(
-        LogTypes.syncManager,
-        'Sync complete: $successCount success, $errorCount errors',
-      );
     } catch (e, stack) {
       LogService.log(LogTypes.syncManager, 'Sync error: $e, $stack');
       _updateState(
