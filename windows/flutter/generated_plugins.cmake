@@ -4,6 +4,7 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   ble_peripheral
+  connectivity_plus
   emoji_picker_flutter
   file_selector_windows
   flutter_ble_peripheral

@@ -48,6 +48,9 @@ dependencies:
   path: ^1.9.1
   flutter_ble_peripheral: ^2.0.1
   ble_peripheral: ^2.4.0
+  http: ^1.6.0
+  connectivity_plus: ^7.0.0
+  nearby_connections: ^4.3.0
 
 dev_dependencies:
   flutter_test:

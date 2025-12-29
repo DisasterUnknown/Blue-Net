@@ -6,6 +6,7 @@ import FlutterMacOS
 import Foundation
 
 import ble_peripheral
+import connectivity_plus
 import emoji_picker_flutter
 import file_selector_macos
 import flutter_ble_peripheral
@@ -17,6 +18,7 @@ import sqflite_darwin
 
 func RegisterGeneratedPlugins(registry: FlutterPluginRegistry) {
   BlePeripheralPlugin.register(with: registry.registrar(forPlugin: "BlePeripheralPlugin"))
+  ConnectivityPlusPlugin.register(with: registry.registrar(forPlugin: "ConnectivityPlusPlugin"))
   EmojiPickerFlutterPlugin.register(with: registry.registrar(forPlugin: "EmojiPickerFlutterPlugin"))
   FileSelectorPlugin.register(with: registry.registrar(forPlugin: "FileSelectorPlugin"))
   FlutterBlePeripheralPlugin.register(with: registry.registrar(forPlugin: "FlutterBlePeripheralPlugin"))

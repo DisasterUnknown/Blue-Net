@@ -29,6 +29,7 @@ class LogService {
       debugPrint(logLine);
     } catch (e) {
       LogService.log(LogTypes.error, 'Error writing log: $e');
+      
     }
   }
 

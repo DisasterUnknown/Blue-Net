@@ -1,4 +1,5 @@
 import 'package:bluetooth_chat_app/data/data_base/db_crypto.dart';
+import 'package:flutter/material.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'dart:convert';
@@ -9,6 +10,8 @@ class DBHelper {
   DBHelper._internal();
 
   static Database? _db;
+
+  final ValueNotifier<int> incomingCountNotifier = ValueNotifier(0);
 
   Future<Database> get db async {
     if (_db != null) return _db!;
@@ -82,14 +85,52 @@ class DBHelper {
     return await database.query('users');
   }
 
+  Future<List<Map<String, dynamic>>> getIncomingIncidents() async {
+    final database = await db;
+    return database.query(
+      'incident_reports_incoming',
+      orderBy: 'receivedAt DESC',
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getOutgoingIncidents() async {
+    final database = await db;
+    return database.query(
+      'incident_reports_outgoing',
+      orderBy: 'reportedAt DESC',
+    );
+  }
+
+  Future<int> insertIncomingIncident(Map<String, dynamic> data) async {
+    final database = await db;
+    final id = await database.insert(
+      'incident_reports_incoming',
+      {
+        ...data,
+        'description': data['description'] ?? null,
+        'receivedAt': DateTime.now().toIso8601String(),
+      },
+      conflictAlgorithm: ConflictAlgorithm.ignore, // prevents duplicates
+    );
+    incomingCountNotifier.value++;
+    return id;
+  }
+
+  Future<void> markReportAsSynced(int id) async {
+    final database = await db;
+    await database.update(
+      'incident_reports_outgoing',
+      {'synced': 1},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   Future<int> updateUserName(String userCode, String newName) async {
     final database = await db;
     return await database.update(
       'users',
-      {
-        'name': newName,
-        'lastConnected': DateTime.now().toIso8601String(),
-      },
+      {'name': newName, 'lastConnected': DateTime.now().toIso8601String()},
       where: 'userCode = ?',
       whereArgs: [userCode],
     );
@@ -138,15 +179,17 @@ class DBHelper {
 
   Future<int> countNonUserMsgs() async {
     final database = await db;
-    final result =
-        await database.rawQuery('SELECT COUNT(*) as c FROM nonUserMsgs');
+    final result = await database.rawQuery(
+      'SELECT COUNT(*) as c FROM nonUserMsgs',
+    );
     return result.first['c'] as int? ?? 0;
   }
 
   Future<int> countPendingNonUserMsgs() async {
     final database = await db;
-    final result = await database
-        .rawQuery('SELECT COUNT(*) as c FROM nonUserMsgs WHERE isReceived = 0');
+    final result = await database.rawQuery(
+      'SELECT COUNT(*) as c FROM nonUserMsgs WHERE isReceived = 0',
+    );
     return result.first['c'] as int? ?? 0;
   }
 
@@ -291,8 +334,9 @@ class DBHelper {
 
   Future<int> countHashMsgs() async {
     final database = await db;
-    final result =
-        await database.rawQuery('SELECT COUNT(*) as c FROM hashMsgs');
+    final result = await database.rawQuery(
+      'SELECT COUNT(*) as c FROM hashMsgs',
+    );
     return result.first['c'] as int? ?? 0;
   }
 
