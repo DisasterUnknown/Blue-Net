@@ -76,17 +76,18 @@ class InfoPage extends StatelessWidget {
           // Live connected devices count using StreamBuilder
           StreamBuilder<List<Peer>>(
             stream: gossipService.meshPeersStream,
+            initialData: gossipService.currentMeshPeers,
             builder: (context, snapshot) {
               final connectedCount = snapshot.data?.length ?? 0;
               return ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: CircleAvatar(
-                  backgroundColor: connectedCount > 0 
+                  backgroundColor: connectedCount > 0
                       ? Colors.greenAccent.withValues(alpha: 0.3)
                       : const Color(0xFF2A2A2A),
                   child: Icon(
                     Icons.devices,
-                    color: connectedCount > 0 
+                    color: connectedCount > 0
                         ? Colors.greenAccent
                         : Colors.lightBlueAccent,
                   ),
@@ -98,11 +99,13 @@ class InfoPage extends StatelessWidget {
                 subtitle: Text(
                   '$connectedCount device(s) currently connected.',
                   style: TextStyle(
-                    color: connectedCount > 0 
+                    color: connectedCount > 0
                         ? Colors.greenAccent.shade200
                         : Colors.grey.shade400,
                     fontSize: 12,
-                    fontWeight: connectedCount > 0 ? FontWeight.w500 : FontWeight.normal,
+                    fontWeight: connectedCount > 0
+                        ? FontWeight.w500
+                        : FontWeight.normal,
                   ),
                 ),
               );
@@ -153,7 +156,7 @@ class InfoPage extends StatelessWidget {
                       stats.successfulDeliveries == 0
                           ? 'No deliveries recorded yet.'
                           : 'Average delivery: ${avgSeconds.toStringAsFixed(1)}s\n'
-                            'Based on ${stats.successfulDeliveries} delivered message(s).',
+                                'Based on ${stats.successfulDeliveries} delivered message(s).',
                       style: TextStyle(
                         color: Colors.grey.shade400,
                         fontSize: 12,
@@ -164,8 +167,10 @@ class InfoPage extends StatelessWidget {
                     contentPadding: EdgeInsets.zero,
                     leading: const CircleAvatar(
                       backgroundColor: Color(0xFF2A2A2A),
-                      child: Icon(Icons.cleaning_services,
-                          color: Colors.lightGreenAccent),
+                      child: Icon(
+                        Icons.cleaning_services,
+                        color: Colors.lightGreenAccent,
+                      ),
                     ),
                     title: const Text(
                       'Cleanup',
@@ -199,7 +204,8 @@ class InfoPage extends StatelessWidget {
           FutureBuilder<Map<String, dynamic>>(
             future: _loadDbStatsWithId(),
             builder: (context, snapshot) {
-              final data = snapshot.data ??
+              final data =
+                  snapshot.data ??
                   const {
                     'myId': null,
                     'users': 0,
@@ -231,8 +237,7 @@ class InfoPage extends StatelessWidget {
                     contentPadding: EdgeInsets.zero,
                     leading: const CircleAvatar(
                       backgroundColor: Color(0xFF2A2A2A),
-                      child:
-                          Icon(Icons.people, color: Colors.lightBlueAccent),
+                      child: Icon(Icons.people, color: Colors.lightBlueAccent),
                     ),
                     title: const Text(
                       'Known Users Stored Locally',
@@ -279,10 +284,7 @@ class InfoPage extends StatelessWidget {
                       '$hashes unique message ID(s) seen so far.\n'
                       'Prevents the same encrypted message from\n'
                       'being processed or forwarded twice.',
-                      style: const TextStyle(
-                        color: Colors.grey,
-                        fontSize: 12,
-                      ),
+                      style: const TextStyle(color: Colors.grey, fontSize: 12),
                     ),
                   ),
                   ListTile(
@@ -299,18 +301,14 @@ class InfoPage extends StatelessWidget {
                       'Messages are encrypted per receiver using a key\n'
                       'derived from their user ID before being stored or\n'
                       'forwarded through the mesh.',
-                      style: TextStyle(
-                        color: Colors.grey,
-                        fontSize: 12,
-                      ),
+                      style: TextStyle(color: Colors.grey, fontSize: 12),
                     ),
                   ),
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: const CircleAvatar(
                       backgroundColor: Color(0xFF2A2A2A),
-                      child:
-                          Icon(Icons.storage_rounded, color: Colors.purple),
+                      child: Icon(Icons.storage_rounded, color: Colors.purple),
                     ),
                     title: const Text(
                       'Local-only Storage',
@@ -320,18 +318,16 @@ class InfoPage extends StatelessWidget {
                       'All chats and routing metadata live inside a local\n'
                       'SQLite database on this device. No cloud or\n'
                       'internet connection is used.',
-                      style: TextStyle(
-                        color: Colors.grey,
-                        fontSize: 12,
-                      ),
+                      style: TextStyle(color: Colors.grey, fontSize: 12),
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 20),
                   ElevatedButton.icon(
                     onPressed: () async {
                       // Trigger manual cleanup
                       final meshIncidentSync = MeshIncidentSyncService();
-                      final stats = await meshIncidentSync.performManualCleanup();
+                      final stats = await meshIncidentSync
+                          .performManualCleanup();
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           content: Text(
@@ -381,5 +377,3 @@ String _formatTime(DateTime time) {
   final ampm = time.hour >= 12 ? 'PM' : 'AM';
   return '$hour:$min $ampm';
 }
-
-

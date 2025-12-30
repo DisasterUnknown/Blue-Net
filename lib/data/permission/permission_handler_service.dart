@@ -4,35 +4,44 @@ import 'package:bluetooth_chat_app/services/log_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class PermissionHandlerService {
-  /// Requests necessary Bluetooth permissions
   static Future<void> requestBluetoothPermissions() async {
-    if (Platform.isAndroid) {
-      // 1. Create a list of permissions to request
-      List<Permission> permissions = [];
+    if (!Platform.isAndroid) return;
 
-      // For Android 12+ (API 31)
-      permissions.add(Permission.bluetoothScan);
-      permissions.add(Permission.bluetoothConnect);
-      permissions.add(Permission.bluetoothAdvertise);
+    final List<Permission> permissions = [];
 
-      // For Android 11 and below, Location is usually required for scanning
-      permissions.add(Permission.location);
+    // ───────── Android 12+ (API 31+) ─────────
+    permissions.addAll([
+      Permission.bluetoothScan,
+      Permission.bluetoothConnect,
+      Permission.bluetoothAdvertise,
+    ]);
 
-      // 2. Request all at once (shows a single or combined dialog)
-      Map<Permission, PermissionStatus> statuses = await permissions.request();
+    // ───────── Android 13+ (API 33+) ─────────
+    permissions.add(Permission.nearbyWifiDevices);
 
-      // 3. Check if crucial ones are granted
-      if (statuses[Permission.bluetoothConnect]?.isDenied ?? false) {
-        LogService.log(
-          LogTypes.permissionHandler,
-          'Bluetooth Connect permission denied - mesh functionality may be limited',
-        );
-      } else {
-        LogService.log(
-          LogTypes.permissionHandler,
-          'Bluetooth permissions granted successfully',
-        );
-      }
+    // ───────── Android 11 and below ─────────
+    permissions.add(Permission.location);
+
+    final statuses = await permissions.request();
+
+    // ---- Logging ----
+    if (statuses[Permission.nearbyWifiDevices]?.isGranted == true) {
+      LogService.log(
+        LogTypes.permissionHandler,
+        'Nearby Wi-Fi Devices permission granted',
+      );
+    } else {
+      LogService.log(
+        LogTypes.permissionHandler,
+        'Nearby Wi-Fi Devices permission denied — discovery WILL FAIL',
+      );
+    }
+
+    if (statuses[Permission.bluetoothConnect]?.isGranted == true) {
+      LogService.log(
+        LogTypes.permissionHandler,
+        'Bluetooth permissions granted successfully',
+      );
     }
   }
 }

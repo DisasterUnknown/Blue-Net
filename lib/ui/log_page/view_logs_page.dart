@@ -4,6 +4,7 @@ import 'package:bluetooth_chat_app/services/log_service.dart';
 import 'package:bluetooth_chat_app/ui/log_page/model/log_entry.dart';
 import 'package:bluetooth_chat_app/ui/log_page/utils/get_type_color.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 class ViewLogsPage extends StatefulWidget {
   const ViewLogsPage({super.key});
@@ -18,6 +19,7 @@ class _ViewLogsPageState extends State<ViewLogsPage> {
   Timer? _refreshTimer;
   final ScrollController _scrollController = ScrollController();
   bool _autoScroll = true;
+  bool _isPaused = false;
 
   @override
   void initState() {
@@ -29,7 +31,7 @@ class _ViewLogsPageState extends State<ViewLogsPage> {
   void _setupLiveUpdates() {
     // Subscribe to live log stream
     _logSubscription = LogService.logStream.listen((logEntry) {
-      if (!mounted) return;
+      if (!mounted || _isPaused) return;
       setState(() {
         // Add new log entry at the beginning (latest first)
         logEntries.insert(0, logEntry);
@@ -61,7 +63,7 @@ class _ViewLogsPageState extends State<ViewLogsPage> {
   }
 
   void _refreshLogs() {
-    if (!mounted) return;
+    if (!mounted || _isPaused) return;
     final currentCount = logEntries.length;
     _loadLogs();
     // Only auto-scroll if new logs were added
@@ -76,6 +78,27 @@ class _ViewLogsPageState extends State<ViewLogsPage> {
         }
       });
     }
+  }
+
+  Future<void> _copyAllLogs() async {
+    final buffer = StringBuffer();
+    for (final entry in logEntries) {
+      buffer.writeln('[${entry.timestamp}]');
+      buffer.writeln('[${entry.type.displayName}]: ${entry.message}');
+      buffer.writeln();
+    }
+    final text = buffer.toString();
+    
+    await Clipboard.setData(ClipboardData(text: text));
+    
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('All logs copied to clipboard'),
+        duration: Duration(seconds: 2),
+        backgroundColor: Colors.green,
+      ),
+    );
   }
 
   void _handleClearLogs() {
@@ -200,6 +223,18 @@ class _ViewLogsPageState extends State<ViewLogsPage> {
         actions: [
           IconButton(
             icon: Icon(
+              _isPaused ? Icons.play_arrow : Icons.pause,
+              color: _isPaused ? Colors.orange : Colors.white70,
+            ),
+            tooltip: _isPaused ? 'Resume logs' : 'Pause logs',
+            onPressed: () {
+              setState(() {
+                _isPaused = !_isPaused;
+              });
+            },
+          ),
+          IconButton(
+            icon: Icon(
               _autoScroll ? Icons.vertical_align_top : Icons.vertical_align_center,
               color: _autoScroll ? Colors.greenAccent : Colors.white70,
             ),
@@ -209,6 +244,11 @@ class _ViewLogsPageState extends State<ViewLogsPage> {
                 _autoScroll = !_autoScroll;
               });
             },
+          ),
+          IconButton(
+            icon: const Icon(Icons.copy),
+            tooltip: 'Copy all logs',
+            onPressed: _copyAllLogs,
           ),
           IconButton(
             icon: const Icon(Icons.refresh),

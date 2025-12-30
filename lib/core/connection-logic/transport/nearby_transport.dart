@@ -25,6 +25,11 @@ class NearbyTransport implements GossipTransport {
 
   // Map endpointId -> Peer metadata
   final Map<String, Peer> _connectedPeers = {};
+  // Track peers that are currently connecting to avoid duplicate connection attempts
+  final Set<String> _connectingPeers = {};
+  // Track recently disconnected peers for reconnection attempts
+  final Map<String, DateTime> _recentlyDisconnected = {};
+  Timer? _reconnectionTimer;
 
   @override
   Stream<ReceivedMessage> get onMessageReceived => _messageController.stream;
@@ -70,6 +75,9 @@ class NearbyTransport implements GossipTransport {
       await _startAdvertising();
       await _startDiscovery();
 
+      // Start periodic reconnection attempts for recently disconnected peers
+      _startReconnectionTimer();
+
       LogService.log(
         LogTypes.nearbyTransport,
         'NearbyTransport initialized successfully - Advertising and Discovery started, Service ID: com.example.hackathon',
@@ -110,8 +118,11 @@ class NearbyTransport implements GossipTransport {
         userName,
         strategy,
         onEndpointFound: (String id, String name, String serviceId) async {
-          // Auto-connect on discovery
-          await _requestConnectionWithRetry(id);
+          // Auto-connect on discovery (if not already connected or connecting)
+          if (!_connectedPeers.containsKey(id) &&
+              !_connectingPeers.contains(id)) {
+            await _requestConnectionWithRetry(id);
+          }
         },
         onEndpointLost: (String? id) {
           // Handle loss
@@ -138,44 +149,79 @@ class NearbyTransport implements GossipTransport {
       return;
     }
 
-    // 2. Random delay to reduce collision probability (0-2 seconds)
+    // 2. Check if already connecting to avoid duplicate attempts
+    if (_connectingPeers.contains(id)) {
+      LogService.log(
+        LogTypes.nearbyTransport,
+        'Already connecting to peer $id - skipping duplicate connection request',
+      );
+      return;
+    }
+
+    // 3. Random delay to reduce collision probability (0-2 seconds)
     final randomDelay = Random().nextInt(2000);
     await Future.delayed(Duration(milliseconds: randomDelay));
 
-    for (int i = 0; i < retries; i++) {
-      // Check again before each attempt
-      if (_connectedPeers.containsKey(id)) return;
+    _connectingPeers.add(id);
 
-      try {
-        await Nearby().requestConnection(
-          userName,
-          id,
-          onConnectionInitiated: (id, info) => _onConnectionInitiated(id, info),
-          onConnectionResult: (id, status) => _onConnectionResult(id, status),
-          onDisconnected: (id) => _onDisconnected(id),
-        );
-        return; // Success
-      } catch (e) {
-        if (e is PlatformException && e.message?.contains('8012') == true) {
-          if (i == retries - 1) {
-            _handleNearbyFailure(
-              'Connection request (exhausted retries)',
-              e,
-              null,
-            );
-          } else {
-            final delay = Duration(seconds: i + 1);
+    try {
+      for (int i = 0; i < retries; i++) {
+        // Check again before each attempt
+        if (_connectedPeers.containsKey(id)) {
+          _connectingPeers.remove(id);
+          return;
+        }
+
+        try {
+          await Nearby().requestConnection(
+            userName,
+            id,
+            onConnectionInitiated: (id, info) =>
+                _onConnectionInitiated(id, info),
+            onConnectionResult: (id, status) => _onConnectionResult(id, status),
+            onDisconnected: (id) => _onDisconnected(id),
+          );
+          // Don't remove from _connectingPeers here - wait for connection result
+          return; // Success
+        } catch (e) {
+          if (e is PlatformException && e.message?.contains('8012') == true) {
+            if (i == retries - 1) {
+              _connectingPeers.remove(id);
+              _handleNearbyFailure(
+                'Connection request (exhausted retries)',
+                e,
+                null,
+              );
+            } else {
+              final delay = Duration(seconds: i + 1);
+              LogService.log(
+                LogTypes.nearbyTransport,
+                'Connection request to peer $id failed (error 8012) - Retry ${i + 1}/$retries in ${delay.inSeconds}s',
+              );
+              await Future.delayed(delay);
+            }
+          } else if (e is PlatformException &&
+              e.message?.contains('8011') == true) {
+            // Endpoint unknown — discard stale endpoint and wait for new discovery
             LogService.log(
               LogTypes.nearbyTransport,
-              'Connection request to peer $id failed (error 8012) - Retry ${i + 1}/$retries in ${delay.inSeconds}s',
+              'Endpoint $id unknown (8011) - will retry when a new endpoint is discovered',
             );
-            await Future.delayed(delay);
+            _connectingPeers.remove(id);
+            _recentlyDisconnected.remove(id); // prevent retrying stale ID
+            return; // exit retry loop
+          } else {
+            _connectingPeers.remove(id);
+            _handleNearbyFailure('Connection request', e, null);
+            break; // Don't retry other errors
           }
-        } else {
-          _handleNearbyFailure('Connection request', e, null);
-          break; // Don't retry other errors
         }
       }
+    } finally {
+      // Remove from connecting set after a delay to allow connection result to process
+      Future.delayed(Duration(seconds: 5), () {
+        _connectingPeers.remove(id);
+      });
     }
   }
 
@@ -187,10 +233,23 @@ class NearbyTransport implements GossipTransport {
   }
 
   void _onConnectionInitiated(String id, ConnectionInfo info) {
+    // Check if already connected to avoid duplicate acceptance
+    if (_connectedPeers.containsKey(id)) {
+      LogService.log(
+        LogTypes.nearbyTransport,
+        'Connection already established with peer $id - ignoring duplicate connection initiation',
+      );
+      return;
+    }
+
     LogService.log(
       LogTypes.nearbyTransport,
       'Connection initiated from peer $id - Auto-accepting connection request (Endpoint name: ${info.endpointName})',
     );
+
+    // Remove from connecting set since we're accepting
+    _connectingPeers.remove(id);
+
     // Auto-accept
     Nearby()
         .acceptConnection(
@@ -214,6 +273,11 @@ class NearbyTransport implements GossipTransport {
   }
 
   void _onConnectionResult(String id, Status status) {
+    // Remove from connecting set regardless of status
+    _connectingPeers.remove(id);
+    // Remove from recently disconnected if present
+    _recentlyDisconnected.remove(id);
+
     if (status == Status.CONNECTED) {
       final peer = Peer(
         id: id,
@@ -226,7 +290,29 @@ class NearbyTransport implements GossipTransport {
       _connectedPeers[id] = peer;
       _peerController.add(peer);
 
-      LogService.log(LogTypes.nearbyTransport, 'Peer $id connected via ${peer.transport}');
+      LogService.log(
+        LogTypes.nearbyTransport,
+        'Peer $id connected via ${peer.transport} - Total connected: ${_connectedPeers.length}',
+      );
+    } else if (status == Status.REJECTED) {
+      LogService.log(
+        LogTypes.nearbyTransport,
+        'Connection to peer $id was REJECTED - Will retry on next discovery',
+      );
+      // Mark as recently disconnected so we can retry
+      _recentlyDisconnected[id] = DateTime.now();
+    } else if (status == Status.ERROR) {
+      LogService.log(
+        LogTypes.nearbyTransport,
+        'Connection to peer $id resulted in ERROR - Will retry on next discovery',
+      );
+      // Mark as recently disconnected so we can retry
+      _recentlyDisconnected[id] = DateTime.now();
+    } else {
+      LogService.log(
+        LogTypes.nearbyTransport,
+        'Connection to peer $id resulted in status: $status',
+      );
     }
   }
 
@@ -234,11 +320,15 @@ class NearbyTransport implements GossipTransport {
     final peer = _connectedPeers.remove(id);
     if (peer != null) {
       _peerDisconnectController.add(peer);
+      // Mark as recently disconnected for potential reconnection
+      _recentlyDisconnected[id] = DateTime.now();
       LogService.log(
         LogTypes.nearbyTransport,
-        'Peer ${peer.id} disconnected - Remaining connected: ${_connectedPeers.length}',
+        'Peer ${peer.id} disconnected - Remaining connected: ${_connectedPeers.length} - Will attempt reconnection',
       );
     }
+    // Also remove from connecting set if present
+    _connectingPeers.remove(id);
   }
 
   void _onPayloadReceived(String endpointId, Payload payload) {
@@ -314,12 +404,60 @@ class NearbyTransport implements GossipTransport {
     }
   }
 
+  void _startReconnectionTimer() {
+    _reconnectionTimer?.cancel();
+    _reconnectionTimer = Timer.periodic(Duration(seconds: 10), (timer) {
+      _attemptReconnections();
+    });
+  }
+
+  void _attemptReconnections() {
+    if (_recentlyDisconnected.isEmpty) return;
+
+    final now = DateTime.now();
+    final peersToRetry = <String>[];
+    final peersToRemove = <String>[];
+
+    // Find peers that were disconnected recently (within last 2 minutes)
+    _recentlyDisconnected.forEach((id, disconnectTime) {
+      if (now.difference(disconnectTime).inSeconds < 120) {
+        // Only retry if not already connected or connecting
+        if (!_connectedPeers.containsKey(id) &&
+            !_connectingPeers.contains(id)) {
+          peersToRetry.add(id);
+        }
+      } else {
+        // Mark old entries for removal (older than 2 minutes)
+        peersToRemove.add(id);
+      }
+    });
+
+    // Remove old entries
+    for (final id in peersToRemove) {
+      _recentlyDisconnected.remove(id);
+    }
+
+    if (peersToRetry.isNotEmpty) {
+      LogService.log(
+        LogTypes.nearbyTransport,
+        'Attempting to reconnect to ${peersToRetry.length} recently disconnected peers',
+      );
+      for (final id in peersToRetry) {
+        _requestConnectionWithRetry(id, retries: 2);
+      }
+    }
+  }
+
   @override
   Future<void> disconnect() async {
+    _reconnectionTimer?.cancel();
+    _reconnectionTimer = null;
     await Nearby().stopAdvertising();
     await Nearby().stopDiscovery();
     await Nearby().stopAllEndpoints();
     _connectedPeers.clear();
+    _connectingPeers.clear();
+    _recentlyDisconnected.clear();
   }
 
   void _handleNearbyFailure(String action, Object error, StackTrace? stack) {

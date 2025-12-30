@@ -8,6 +8,7 @@ enum PayloadType {
   ping,
   peerAnnouncement,
   incidentData, // For mesh incident synchronization
+  chatMessage, // For chat messages between users
 }
 
 class GossipPayload {
@@ -63,6 +64,27 @@ class GossipPayload {
     return GossipPayload(
       type: PayloadType.incidentData,
       data: incidentData,
+    );
+  }
+
+  factory GossipPayload.chatMessage({
+    required String msgId,
+    required String msg,
+    required String senderUserCode,
+    required String receiverUserCode,
+    required String sendDate,
+    int hops = 0,
+  }) {
+    return GossipPayload(
+      type: PayloadType.chatMessage,
+      data: {
+        'msgId': msgId,
+        'msg': msg,
+        'senderUserCode': senderUserCode,
+        'receiverUserCode': receiverUserCode,
+        'sendDate': sendDate,
+        'hops': hops,
+      },
     );
   }
 }

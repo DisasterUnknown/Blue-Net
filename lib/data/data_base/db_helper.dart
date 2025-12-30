@@ -216,7 +216,7 @@ class DBHelper {
           'incident_reports_incoming',
           {
             ...data,
-            'description': data['description'] ?? null,
+            'description': data['description'],
             'receivedAt': DateTime.now().toIso8601String(),
             // Preserve isReceived status if already set
             'isReceived': existingIncoming.first['isReceived'] ?? data['isReceived'] ?? 0,
@@ -238,7 +238,7 @@ class DBHelper {
       'incident_reports_incoming',
       {
         ...data,
-        'description': data['description'] ?? null,
+        'description': data['description'],
         'receivedAt': DateTime.now().toIso8601String(),
       },
       conflictAlgorithm: ConflictAlgorithm.replace, // Replace on conflict

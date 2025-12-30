@@ -7,6 +7,7 @@ import 'package:bluetooth_chat_app/core/connection-logic/transport/transport_man
 import 'package:bluetooth_chat_app/core/enums/logs_enums.dart';
 import 'package:bluetooth_chat_app/data/data_base/db_helper.dart';
 import 'package:bluetooth_chat_app/services/log_service.dart';
+import 'package:bluetooth_chat_app/services/uuid_service.dart';
 
 /// Mesh Incident Sync Service
 ///
@@ -78,8 +79,12 @@ class MeshIncidentSyncService {
       final message = received.message;
       final peer = received.peer;
 
+      // Check if this is a chat message
+      if (message.payload.type == PayloadType.chatMessage) {
+        await _processIncomingChatMessage(message.payload.data, peer);
+      }
       // Check if this is an incident data message (formSubmission is used by gossip protocol)
-      if (message.payload.type == PayloadType.formSubmission ||
+      else if (message.payload.type == PayloadType.formSubmission ||
           message.payload.type == PayloadType.incidentData) {
         // Process as incident data
         await _processIncomingIncident(message.payload.data, peer);
@@ -213,6 +218,108 @@ class MeshIncidentSyncService {
     }
   }
 
+  /// Process incoming chat message from peer
+  Future<void> _processIncomingChatMessage(
+    Map<String, dynamic> chatData,
+    Peer peer,
+  ) async {
+    try {
+      final msgId = chatData['msgId'] as String?;
+      final msg = chatData['msg'] as String?;
+      final senderUserCode = chatData['senderUserCode'] as String?;
+      final receiverUserCode = chatData['receiverUserCode'] as String?;
+      final sendDate = chatData['sendDate'] as String?;
+      final hops = (chatData['hops'] as int?) ?? 0;
+
+      if (msgId == null || msg == null || senderUserCode == null || receiverUserCode == null) {
+        LogService.log(
+          LogTypes.meshIncidentSync,
+          'Invalid chat message received from ${peer.id} - missing required fields',
+        );
+        return;
+      }
+
+      final db = DBHelper();
+      final database = await db.db;
+
+      // Check if message already exists (duplicate detection)
+      final existing = await database.query(
+        'nonUserMsgs',
+        where: 'msgId = ?',
+        whereArgs: [msgId],
+        limit: 1,
+      );
+
+      if (existing.isNotEmpty) {
+        LogService.log(
+          LogTypes.meshIncidentSync,
+          'Duplicate chat message $msgId received from ${peer.id}, ignoring',
+        );
+        return;
+      }
+
+      // Get our user code
+      final myUserCode = await AppIdentifier.getId();
+      final isForMe = receiverUserCode == myUserCode;
+
+      if (isForMe) {
+        // This message is for us - store in chat messages table
+        LogService.log(
+          LogTypes.meshIncidentSync,
+          'Received chat message $msgId from $senderUserCode (for me) via ${peer.id}',
+        );
+
+        await db.insertChatMsg(
+          senderUserCode,
+          {
+            'msgId': msgId,
+            'msg': msg,
+            'sendDate': sendDate ?? DateTime.now().toIso8601String(),
+            'receiveDate': DateTime.now().toIso8601String(),
+            'isReceived': 1, // Mark as received
+          },
+          encrypt: true,
+          receiverUserCode: senderUserCode,
+          myUserCode: myUserCode,
+        );
+
+        // Mark as received in nonUserMsgs if it exists there
+        await db.insertNonUserMsg({
+          'msgId': msgId,
+          'msg': msg,
+          'sendDate': sendDate ?? DateTime.now().toIso8601String(),
+          'receiveDate': DateTime.now().toIso8601String(),
+          'senderUserCode': senderUserCode,
+          'receiverUserCode': receiverUserCode,
+          'isReceived': 1, // Mark as received
+          'hops': hops,
+        });
+      } else {
+        // This message is not for us - store in nonUserMsgs for forwarding
+        LogService.log(
+          LogTypes.meshIncidentSync,
+          'Received chat message $msgId from $senderUserCode to $receiverUserCode (not for me) via ${peer.id} - storing for forwarding',
+        );
+
+        await db.insertNonUserMsg({
+          'msgId': msgId,
+          'msg': msg,
+          'sendDate': sendDate ?? DateTime.now().toIso8601String(),
+          'receiveDate': null,
+          'senderUserCode': senderUserCode,
+          'receiverUserCode': receiverUserCode,
+          'isReceived': 0, // Not received by destination yet
+          'hops': hops + 1, // Increment hop count
+        });
+      }
+    } catch (e, stack) {
+      LogService.log(
+        LogTypes.meshIncidentSync,
+        'Error processing incoming chat message from ${peer.id}: $e, $stack',
+      );
+    }
+  }
+
   /// Process received confirmation - stop broadcasting this incident
   Future<void> _processReceivedConfirmation(
     Map<String, dynamic> confirmationData,
@@ -270,6 +377,7 @@ class MeshIncidentSyncService {
     _sentToPeers[peer.id] = <String>{};
     // Sync all data to this new peer
     await _syncToPeer(peer);
+    await _syncChatMessagesToPeer(peer);
     LogService.log(
       LogTypes.meshIncidentSync,
       'Completed initial sync with peer ${peer.id}',
@@ -289,11 +397,12 @@ class MeshIncidentSyncService {
 
     LogService.log(
       LogTypes.meshIncidentSync,
-      'Periodic sync: Syncing incident data to ${peers.length} connected peer(s)',
+      'Periodic sync: Syncing incident data and chat messages to ${peers.length} connected peer(s)',
     );
 
     for (final peer in peers) {
       await _syncToPeer(peer);
+      await _syncChatMessagesToPeer(peer);
     }
   }
 
@@ -422,6 +531,84 @@ class MeshIncidentSyncService {
       LogService.log(
         LogTypes.meshIncidentSync,
         'Error syncing to peer ${peer.id}: $e, $stack',
+      );
+    }
+  }
+
+  /// Sync pending chat messages to a specific peer
+  Future<void> _syncChatMessagesToPeer(Peer peer) async {
+    if (_transportManager == null) return;
+
+    try {
+      final db = DBHelper();
+      final pendingMessages = await db.getPendingNonUserMsgs();
+
+      if (pendingMessages.isEmpty) {
+        return; // No pending messages
+      }
+
+      // Get messages already sent to this peer
+      final sentToThisPeer = _sentToPeers[peer.id] ?? <String>{};
+
+      // Filter out already sent messages and messages that are already received
+      final messagesToSend = pendingMessages.where((msg) {
+        final msgId = msg['msgId'] as String?;
+        final isReceived = (msg['isReceived'] as int?) ?? 0;
+        return msgId != null && 
+               !sentToThisPeer.contains(msgId) && 
+               isReceived == 0;
+      }).toList();
+
+      if (messagesToSend.isEmpty) {
+        return; // No new messages to send
+      }
+
+      LogService.log(
+        LogTypes.meshIncidentSync,
+        'Syncing ${messagesToSend.length} pending chat message(s) to ${peer.id}',
+      );
+
+      for (final msgData in messagesToSend) {
+        final msgId = msgData['msgId'] as String?;
+        if (msgId == null) continue;
+
+        try {
+          final payload = GossipPayload.chatMessage(
+            msgId: msgId,
+            msg: msgData['msg'] as String? ?? '',
+            senderUserCode: msgData['senderUserCode'] as String? ?? '',
+            receiverUserCode: msgData['receiverUserCode'] as String? ?? '',
+            sendDate: msgData['sendDate'] as String? ?? DateTime.now().toIso8601String(),
+            hops: (msgData['hops'] as int?) ?? 0,
+          );
+
+          final message = GossipMessage(
+            id: msgId,
+            originId: _getDeviceId(),
+            payload: payload,
+            hops: (msgData['hops'] as int?) ?? 0,
+            ttl: 24,
+            timestamp: DateTime.now(),
+          );
+
+          await _transportManager!.sendMessage(peer, message);
+
+          // Mark as sent to this peer
+          _sentToPeers.putIfAbsent(peer.id, () => <String>{}).add(msgId);
+
+          // Small delay to prevent flooding
+          await Future.delayed(const Duration(milliseconds: 50));
+        } catch (e) {
+          LogService.log(
+            LogTypes.meshIncidentSync,
+            'Failed to send chat message $msgId to ${peer.id}: $e',
+          );
+        }
+      }
+    } catch (e, stack) {
+      LogService.log(
+        LogTypes.meshIncidentSync,
+        'Error syncing chat messages to peer ${peer.id}: $e, $stack',
       );
     }
   }

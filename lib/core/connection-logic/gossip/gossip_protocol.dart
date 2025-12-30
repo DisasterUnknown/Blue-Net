@@ -112,9 +112,10 @@ class GossipProtocol {
     );
 
     // 6. Add to batched gossip queue (OPTIMIZED: don't gossip immediately)
-    // Urgent messages (formSubmission, incidentData) get priority
+    // Urgent messages (formSubmission, incidentData, chatMessage) get priority
     if (message.payload.type == PayloadType.formSubmission ||
-        message.payload.type == PayloadType.incidentData) {
+        message.payload.type == PayloadType.incidentData ||
+        message.payload.type == PayloadType.chatMessage) {
       _pendingGossip.insert(0, message); // Priority queue
       // For urgent messages, gossip immediately instead of waiting for batch
       await _gossipMessageOptimized(message, excludePeerId: sender.id);
@@ -126,12 +127,22 @@ class GossipProtocol {
   Future<void> _handlePeerDiscovered(Peer peer) async {
     await _storage.savePeer(peer..lastSeen = DateTime.now());
     
+    // Verify peer is actually connected before sending messages
+    final connectedPeerIds = _transport.connectedPeers.map((p) => p.id).toSet();
+    if (!connectedPeerIds.contains(peer.id)) {
+      LogService.log(
+        LogTypes.gossipProtocol,
+        'Peer ${peer.id} discovered but not yet connected - skipping message sync',
+      );
+      return;
+    }
+    
     // Store-and-Carry: Send all our pending (carried) messages to this new peer
     final pendingMessages = await _storage.getPendingMessages();
     if (pendingMessages.isNotEmpty) {
       LogService.log(
         LogTypes.gossipProtocol,
-        'Peer ${peer.id} discovered - syncing ${pendingMessages.length} carried message(s) via store-and-carry',
+        'Peer ${peer.id} discovered and connected - syncing ${pendingMessages.length} carried message(s) via store-and-carry',
       );
       for (final message in pendingMessages) {
         if (message.isExpired()) {
@@ -140,6 +151,16 @@ class GossipProtocol {
             'Skipping expired message ${message.id} for peer ${peer.id}',
           );
           continue;
+        }
+        
+        // Double-check peer is still connected before sending
+        final stillConnected = _transport.connectedPeers.any((p) => p.id == peer.id);
+        if (!stillConnected) {
+          LogService.log(
+            LogTypes.gossipProtocol,
+            'Peer ${peer.id} disconnected during sync - stopping message sync',
+          );
+          break;
         }
         
         try {
@@ -160,7 +181,7 @@ class GossipProtocol {
     } else {
       LogService.log(
         LogTypes.gossipProtocol,
-        'Peer ${peer.id} discovered - no pending messages to sync',
+        'Peer ${peer.id} discovered and connected - no pending messages to sync',
       );
     }
   }
@@ -185,17 +206,23 @@ class GossipProtocol {
       return;
     }
 
-    final peers = await _storage.getActivePeers(_peerStaleThreshold);
+    // CRITICAL: Only use actually connected peers, not just stored peers
+    final connectedPeerIds = _transport.connectedPeers.map((p) => p.id).toSet();
+    final storedPeers = await _storage.getActivePeers(_peerStaleThreshold);
 
-    // Filter out critical battery and excluded peer
-    final candidatePeers = peers
-        .where((p) => p.batteryLevel > 15 && p.id != excludePeerId)
+    // Filter to only peers that are actually connected AND meet other criteria
+    final candidatePeers = storedPeers
+        .where((p) => 
+            connectedPeerIds.contains(p.id) && // Must be actually connected
+            p.batteryLevel > 15 && 
+            p.id != excludePeerId)
         .toList();
 
     if (candidatePeers.isEmpty) {
+      final connectedCount = connectedPeerIds.length;
       LogService.log(
         LogTypes.gossipProtocol,
-        'No candidate peers available for message ${message.id} - all peers have low battery or excluded',
+        'No candidate peers available for message ${message.id} - $connectedCount connected peer(s), but none meet criteria (low battery, excluded, or not in stored peers)',
       );
       return;
     }

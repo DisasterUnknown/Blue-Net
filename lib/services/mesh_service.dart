@@ -4,6 +4,10 @@ import 'dart:async';
 import 'package:bluetooth_chat_app/data/data_base/db_helper.dart';
 import 'package:bluetooth_chat_app/services/gossip_service.dart';
 import 'package:bluetooth_chat_app/core/connection-logic/gossip/peer.dart';
+import 'package:bluetooth_chat_app/core/connection-logic/gossip/gossip_message.dart';
+import 'package:bluetooth_chat_app/core/connection-logic/gossip/gossip_payload.dart';
+import 'package:bluetooth_chat_app/core/enums/logs_enums.dart';
+import 'package:bluetooth_chat_app/services/log_service.dart';
 import 'package:flutter/material.dart';
 
 class MeshStats {
@@ -82,14 +86,15 @@ class MeshService {
     }
     // Store message in database for routing
     final db = DBHelper();
-    final msgId = '${myUserCode}-${DateTime.now().millisecondsSinceEpoch}';
+    final msgId = '$myUserCode-${DateTime.now().millisecondsSinceEpoch}';
+    final sendDate = DateTime.now().toIso8601String();
     
     await db.insertChatMsg(
       targetUserCode,
       {
         'msgId': msgId,
         'msg': plainText,
-        'sendDate': DateTime.now().toIso8601String(),
+        'sendDate': sendDate,
         'receiveDate': null,
         'isReceived': 0,
       },
@@ -102,7 +107,7 @@ class MeshService {
     await db.insertNonUserMsg({
       'msgId': msgId,
       'msg': plainText,
-      'sendDate': DateTime.now().toIso8601String(),
+      'sendDate': sendDate,
       'receiveDate': null,
       'senderUserCode': myUserCode,
       'receiverUserCode': targetUserCode,
@@ -110,10 +115,53 @@ class MeshService {
       'hops': 0,
     });
 
+    // Broadcast message via gossip protocol
+    try {
+      final gossipService = GossipService();
+      final payload = GossipPayload.chatMessage(
+        msgId: msgId,
+        msg: plainText,
+        senderUserCode: myUserCode,
+        receiverUserCode: targetUserCode,
+        sendDate: sendDate,
+        hops: 0,
+      );
+      
+      final message = GossipMessage(
+        id: msgId,
+        originId: _generateDeviceId(),
+        payload: payload,
+        hops: 0,
+        ttl: 24, // 24 hours TTL
+        timestamp: DateTime.now(),
+      );
+
+      LogService.log(
+        LogTypes.gossipService,
+        'Broadcasting chat message $msgId from $myUserCode to $targetUserCode via mesh',
+      );
+      
+      await gossipService.gossip.broadcastMessage(message);
+      
+      LogService.log(
+        LogTypes.gossipService,
+        'Chat message $msgId broadcast successfully',
+      );
+    } catch (e, stack) {
+      LogService.log(
+        LogTypes.gossipService,
+        'Failed to broadcast chat message $msgId: $e, $stack',
+      );
+    }
+
     // Update stats
     stats.value = MeshStats(
       totalMessagesSent: stats.value.totalMessagesSent + 1,
     );
+  }
+
+  String _generateDeviceId() {
+    return 'device_${DateTime.now().millisecondsSinceEpoch}';
   }
 }
 
