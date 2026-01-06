@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:bluetooth_chat_app/data/data_base/db_crypto.dart';
 import 'package:bluetooth_chat_app/data/models/message.dart';
 import 'package:bluetooth_chat_app/ui/chat_page/widget/message_bubble.dart';
 import 'package:bluetooth_chat_app/data/data_base/db_helper.dart';
@@ -52,32 +53,46 @@ class _ChatPageState extends State<ChatPage> {
   /// Refresh messages from database to show new incoming messages
   Future<void> _refreshMessages() async {
     if (_myId == null) return;
-    
+
     final db = DBHelper();
     final rawMsgs = await db.getChatMsgs(widget.userId, myUserCode: _myId);
+
     final loaded = rawMsgs.map((m) {
-      final text = (m['msg'] as String?) ?? '';
+      final encryptedText = (m['msg'] as String?) ?? '';
       final isMe = m['isReceived'] == 0;
       final id = (m['msgId'] as String?) ?? '';
-      final sendDateStr = (m['sendDate'] as String?) ??
-          DateTime.now().toIso8601String();
+      final sendDateStr =
+          (m['sendDate'] as String?) ?? DateTime.now().toIso8601String();
       final time = DateTime.tryParse(sendDateStr) ?? DateTime.now();
+
+      String text;
+
+      if (isMe) {
+        text =
+            CryptoHelper.decryptMsg(encryptedText, widget.userId) ??
+            '[Encrypted]';
+      } else {
+        text = CryptoHelper.decryptMsg(encryptedText, _myId!) ?? '[Encrypted]';
+      }
+
       return Message(id: id, text: text, isMe: isMe, time: time);
     }).toList();
 
     if (!mounted) return;
-    
+
     // Only update if messages changed
     if (loaded.length != _messages.length ||
-        loaded.any((newMsg) => !_messages.any((oldMsg) => oldMsg.id == newMsg.id))) {
+        loaded.any(
+          (newMsg) => !_messages.any((oldMsg) => oldMsg.id == newMsg.id),
+        )) {
       setState(() {
         _messages.clear();
         _messages.addAll(loaded);
       });
-      
+
       // Mark new messages as read
       await _markMessagesAsRead();
-      
+
       // Auto-scroll to bottom if new message received
       if (loaded.isNotEmpty && loaded.last.isMe == false) {
         Future.delayed(const Duration(milliseconds: 100), () {
@@ -96,15 +111,26 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _loadInitialData() async {
     final myId = await AppIdentifier.getId();
     final db = DBHelper();
-    final rawMsgs =
-        await db.getChatMsgs(widget.userId, myUserCode: myId);
+    final rawMsgs = await db.getChatMsgs(widget.userId, myUserCode: myId);
+
     final loaded = rawMsgs.map((m) {
-      final text = (m['msg'] as String?) ?? '';
+      final encryptedText = (m['msg'] as String?) ?? '';
       final isMe = m['isReceived'] == 0;
       final id = (m['msgId'] as String?) ?? '';
-      final sendDateStr = (m['sendDate'] as String?) ??
-          DateTime.now().toIso8601String();
+      final sendDateStr =
+          (m['sendDate'] as String?) ?? DateTime.now().toIso8601String();
       final time = DateTime.tryParse(sendDateStr) ?? DateTime.now();
+
+      String text;
+
+      if (isMe) {
+        text =
+            CryptoHelper.decryptMsg(encryptedText, widget.userId) ??
+            '[Encrypted]';
+      } else {
+        text = CryptoHelper.decryptMsg(encryptedText, myId) ?? '[Encrypted]';
+      }
+
       return Message(id: id, text: text, isMe: isMe, time: time);
     }).toList();
 
@@ -354,8 +380,10 @@ class _ChatPageState extends State<ChatPage> {
                 ),
               if (msg.isMe)
                 ListTile(
-                  leading:
-                      const Icon(Icons.delete_outline, color: Colors.redAccent),
+                  leading: const Icon(
+                    Icons.delete_outline,
+                    color: Colors.redAccent,
+                  ),
                   title: const Text(
                     'Delete',
                     style: TextStyle(color: Colors.redAccent),
@@ -409,8 +437,7 @@ class _ChatPageState extends State<ChatPage> {
               backgroundColor: Colors.greenAccent,
               foregroundColor: Colors.black,
             ),
-            onPressed: () =>
-                Navigator.pop(context, controller.text.trim()),
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
             child: const Text('Save'),
           ),
         ],

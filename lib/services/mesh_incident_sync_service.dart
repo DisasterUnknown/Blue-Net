@@ -126,7 +126,7 @@ class MeshIncidentSyncService {
       // Check in database for duplicates using efficient query
       final db = DBHelper();
       final database = await db.db;
-      
+
       // Check in incoming incidents
       final existingIncoming = await database.query(
         'incident_reports_incoming',
@@ -134,7 +134,7 @@ class MeshIncidentSyncService {
         whereArgs: [incidentId],
         limit: 1,
       );
-      
+
       // Check in outgoing incidents (if this is our own incident)
       final existingOutgoing = await database.query(
         'incident_reports_outgoing',
@@ -192,13 +192,13 @@ class MeshIncidentSyncService {
       if (originalUserId != null && originalUserId == myUserId) {
         // This is our incident - mark as received and stop broadcasting
         _receivedByOwner.add(incidentId);
-        
+
         // Update database to mark as received in both tables
         await db.markIncidentAsReceived(incidentId);
-        
+
         // Broadcast received confirmation to stop other devices from broadcasting
         await _broadcastReceivedConfirmation(incidentId);
-        
+
         LogService.log(
           LogTypes.meshIncidentSync,
           'Incident $incidentId received by owner (userId=$myUserId), stopping broadcasts',
@@ -231,7 +231,10 @@ class MeshIncidentSyncService {
       final sendDate = chatData['sendDate'] as String?;
       final hops = (chatData['hops'] as int?) ?? 0;
 
-      if (msgId == null || msg == null || senderUserCode == null || receiverUserCode == null) {
+      if (msgId == null ||
+          msg == null ||
+          senderUserCode == null ||
+          receiverUserCode == null) {
         LogService.log(
           LogTypes.meshIncidentSync,
           'Invalid chat message received from ${peer.id} - missing required fields',
@@ -279,7 +282,7 @@ class MeshIncidentSyncService {
             'isReceived': 1, // Mark as received
           },
           encrypt: true,
-          receiverUserCode: senderUserCode,
+          receiverUserCode: receiverUserCode,
           myUserCode: myUserCode,
         );
 
@@ -293,6 +296,12 @@ class MeshIncidentSyncService {
           'receiverUserCode': receiverUserCode,
           'isReceived': 1, // Mark as received
           'hops': hops,
+        });
+
+        await db.insertUser({
+          'userCode': senderUserCode,
+          'name': peer.name,
+          'lastConnected': DateTime.now().toIso8601String(),
         });
       } else {
         // This message is not for us - store in nonUserMsgs for forwarding
@@ -327,14 +336,14 @@ class MeshIncidentSyncService {
   ) async {
     try {
       final incidentId =
-          confirmationData['form_id'] ?? 
+          confirmationData['form_id'] ??
           confirmationData['incident_id'] ??
           confirmationData['incidentId'];
 
       if (incidentId == null) return;
 
       final incidentIdStr = incidentId.toString();
-      
+
       // Check if we already processed this confirmation
       if (_receivedByOwner.contains(incidentIdStr)) {
         return; // Already processed
@@ -347,14 +356,17 @@ class MeshIncidentSyncService {
 
       // Mark as received by owner - stop broadcasting
       _receivedByOwner.add(incidentIdStr);
-      
+
       // Update database in both incoming and outgoing tables
       final db = DBHelper();
       await db.markIncidentAsReceived(incidentIdStr);
-      
+
       // Re-broadcast this confirmation to other peers (so they also stop broadcasting)
-      await _broadcastReceivedConfirmation(incidentIdStr, excludePeerId: peer.id);
-      
+      await _broadcastReceivedConfirmation(
+        incidentIdStr,
+        excludePeerId: peer.id,
+      );
+
       LogService.log(
         LogTypes.meshIncidentSync,
         'Stopped broadcasting incident $incidentIdStr based on confirmation from ${peer.id}',
@@ -383,7 +395,6 @@ class MeshIncidentSyncService {
       'Completed initial sync with peer ${peer.id}',
     );
   }
-
 
   /// Sync all incident data to all connected peers (every 10 seconds)
   Future<void> _syncToAllPeers() async {
@@ -427,7 +438,7 @@ class MeshIncidentSyncService {
       // Only send if not already received by owner
       for (final inc in outgoing) {
         final incidentId = inc['localId'] as String?;
-        if (incidentId != null && 
+        if (incidentId != null &&
             !sentToThisPeer.contains(incidentId) &&
             !_receivedByOwner.contains(incidentId)) {
           // Check if this incident is already synced/received
@@ -455,7 +466,7 @@ class MeshIncidentSyncService {
       // Only send if not already received by owner
       for (final inc in incoming) {
         final incidentId = inc['remoteId'] as String?;
-        if (incidentId != null && 
+        if (incidentId != null &&
             !sentToThisPeer.contains(incidentId) &&
             !_receivedByOwner.contains(incidentId)) {
           allIncidents.add({
@@ -554,9 +565,9 @@ class MeshIncidentSyncService {
       final messagesToSend = pendingMessages.where((msg) {
         final msgId = msg['msgId'] as String?;
         final isReceived = (msg['isReceived'] as int?) ?? 0;
-        return msgId != null && 
-               !sentToThisPeer.contains(msgId) && 
-               isReceived == 0;
+        return msgId != null &&
+            !sentToThisPeer.contains(msgId) &&
+            isReceived == 0;
       }).toList();
 
       if (messagesToSend.isEmpty) {
@@ -578,7 +589,9 @@ class MeshIncidentSyncService {
             msg: msgData['msg'] as String? ?? '',
             senderUserCode: msgData['senderUserCode'] as String? ?? '',
             receiverUserCode: msgData['receiverUserCode'] as String? ?? '',
-            sendDate: msgData['sendDate'] as String? ?? DateTime.now().toIso8601String(),
+            sendDate:
+                msgData['sendDate'] as String? ??
+                DateTime.now().toIso8601String(),
             hops: (msgData['hops'] as int?) ?? 0,
           );
 
@@ -726,7 +739,6 @@ class MeshIncidentSyncService {
     }
   }
 
-
   /// Clean up tracking for disconnected peer
   void _handlePeerDisconnected(Peer peer) {
     _sentToPeers.remove(peer.id);
@@ -753,7 +765,7 @@ class MeshIncidentSyncService {
       const Duration(minutes: 30),
       (_) => _performCleanup(),
     );
-    
+
     // Also run initial cleanup after 5 minutes
     Future.delayed(const Duration(minutes: 5), () => _performCleanup());
   }
@@ -763,11 +775,11 @@ class MeshIncidentSyncService {
     try {
       final db = DBHelper();
       final results = await db.cleanupNonOwnedData(
-        hashMsgsDays: 7,        // Keep hash messages for 7 days
+        hashMsgsDays: 7, // Keep hash messages for 7 days
         receivedIncidentsDays: 1, // Remove received incidents after 1 day
-        oldIncidentsDays: 3,     // Remove old unreceived incidents after 3 days
-        deliveredMsgsDays: 1,    // Remove delivered relay messages after 1 day
-        oldNonUserMsgsDays: 3,   // Remove old non-user messages after 3 days
+        oldIncidentsDays: 3, // Remove old unreceived incidents after 3 days
+        deliveredMsgsDays: 1, // Remove delivered relay messages after 1 day
+        oldNonUserMsgsDays: 3, // Remove old non-user messages after 3 days
       );
 
       final totalRemoved = results.values.fold(0, (sum, count) => sum + count);

@@ -1,9 +1,9 @@
 class Message {
   final String id;
-  final String text;
   final bool isMe;
   final DateTime time;
   final String? replyPreview;
+  String text;
 
   Message({
     required this.id,
