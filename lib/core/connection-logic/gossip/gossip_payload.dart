@@ -9,6 +9,7 @@ enum PayloadType {
   peerAnnouncement,
   incidentData, // For mesh incident synchronization
   chatMessage, // For chat messages between users
+  chatReceipt, // Delivery receipt for chat messages
 }
 
 class GossipPayload {
@@ -84,6 +85,23 @@ class GossipPayload {
         'receiverUserCode': receiverUserCode,
         'sendDate': sendDate,
         'hops': hops,
+      },
+    );
+  }
+
+  factory GossipPayload.chatReceipt({
+    required String msgId,
+    required String senderUserCode,
+    required String receiverUserCode,
+    required String receivedAt,
+  }) {
+    return GossipPayload(
+      type: PayloadType.chatReceipt,
+      data: {
+        'msgId': msgId,
+        'senderUserCode': senderUserCode,
+        'receiverUserCode': receiverUserCode,
+        'receivedAt': receivedAt,
       },
     );
   }

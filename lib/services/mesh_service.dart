@@ -8,6 +8,8 @@ import 'package:bluetooth_chat_app/core/connection-logic/gossip/gossip_message.d
 import 'package:bluetooth_chat_app/core/connection-logic/gossip/gossip_payload.dart';
 import 'package:bluetooth_chat_app/core/enums/logs_enums.dart';
 import 'package:bluetooth_chat_app/services/log_service.dart';
+import 'package:bluetooth_chat_app/core/shared_prefs/shared_pref_service.dart';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 
 class MeshStats {
@@ -30,20 +32,88 @@ class MeshStats {
     this.nextCleanupTime,
     this.lastCleanupRemovedCount = 0,
   });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'currentConnectedDevices': currentConnectedDevices,
+      'totalMessagesSent': totalMessagesSent,
+      'totalMessagesReceived': totalMessagesReceived,
+      'totalMessagesDeliveredToMe': totalMessagesDeliveredToMe,
+      'avgDeliveryMillis': avgDeliveryMillis,
+      'successfulDeliveries': successfulDeliveries,
+      'nextCleanupTime': nextCleanupTime?.toIso8601String(),
+      'lastCleanupRemovedCount': lastCleanupRemovedCount,
+    };
+  }
+
+  factory MeshStats.fromJson(Map<String, dynamic> json) {
+    return MeshStats(
+      currentConnectedDevices: json['currentConnectedDevices'] as int? ?? 0,
+      totalMessagesSent: json['totalMessagesSent'] as int? ?? 0,
+      totalMessagesReceived: json['totalMessagesReceived'] as int? ?? 0,
+      totalMessagesDeliveredToMe:
+          json['totalMessagesDeliveredToMe'] as int? ?? 0,
+      avgDeliveryMillis: json['avgDeliveryMillis'] as int? ?? 0,
+      successfulDeliveries: json['successfulDeliveries'] as int? ?? 0,
+      nextCleanupTime: json['nextCleanupTime'] != null
+          ? DateTime.tryParse(json['nextCleanupTime'] as String)
+          : null,
+      lastCleanupRemovedCount:
+          json['lastCleanupRemovedCount'] as int? ?? 0,
+    );
+  }
 }
 
 class MeshService {
   static final MeshService _instance = MeshService._internal();
   factory MeshService() => _instance;
-  MeshService._internal();
+  MeshService._internal() {
+    _loadPersistedStats();
+  }
 
   static MeshService get instance => _instance;
 
   final ValueNotifier<MeshStats> stats = ValueNotifier<MeshStats>(MeshStats());
+  static const String _statsPrefsKey = 'mesh_stats_v1';
   
   // Stream subscription for connected peers updates
   StreamSubscription<List<Peer>>? _peersSubscription;
   bool _isInitialized = false;
+
+  Future<void> _loadPersistedStats() async {
+    try {
+      final raw =
+          await LocalSharedPreferences.getString(_statsPrefsKey);
+      if (raw == null) return;
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      final loaded = MeshStats.fromJson(decoded);
+      stats.value = loaded;
+      LogService.log(
+        LogTypes.info,
+        'Loaded persisted mesh stats: ${loaded.toJson()}',
+      );
+    } catch (e) {
+      LogService.log(
+        LogTypes.info,
+        'Failed to load persisted mesh stats: $e',
+      );
+    }
+  }
+
+  Future<void> _persistStats() async {
+    try {
+      final jsonString = jsonEncode(stats.value.toJson());
+      await LocalSharedPreferences.setString(
+        _statsPrefsKey,
+        jsonString,
+      );
+    } catch (e) {
+      LogService.log(
+        LogTypes.info,
+        'Failed to persist mesh stats: $e',
+      );
+    }
+  }
 
   void _initializeLiveUpdates() {
     if (_isInitialized) return;
@@ -57,17 +127,91 @@ class MeshService {
           currentConnectedDevices: peers.length,
           totalMessagesSent: stats.value.totalMessagesSent,
           totalMessagesReceived: stats.value.totalMessagesReceived,
-          totalMessagesDeliveredToMe: stats.value.totalMessagesDeliveredToMe,
+          totalMessagesDeliveredToMe:
+              stats.value.totalMessagesDeliveredToMe,
           avgDeliveryMillis: stats.value.avgDeliveryMillis,
           successfulDeliveries: stats.value.successfulDeliveries,
           nextCleanupTime: stats.value.nextCleanupTime,
-          lastCleanupRemovedCount: stats.value.lastCleanupRemovedCount,
+          lastCleanupRemovedCount:
+              stats.value.lastCleanupRemovedCount,
         );
+        _persistStats();
       });
     } catch (e) {
       // GossipService might not be initialized yet
       _isInitialized = false;
     }
+  }
+
+  /// Helper to immutably update stats without losing existing values.
+  void _updateStats({
+    int? currentConnectedDevices,
+    int? totalMessagesSent,
+    int? totalMessagesReceived,
+    int? totalMessagesDeliveredToMe,
+    int? avgDeliveryMillis,
+    int? successfulDeliveries,
+    DateTime? nextCleanupTime,
+    int? lastCleanupRemovedCount,
+  }) {
+    final current = stats.value;
+    stats.value = MeshStats(
+      currentConnectedDevices:
+          currentConnectedDevices ?? current.currentConnectedDevices,
+      totalMessagesSent: totalMessagesSent ?? current.totalMessagesSent,
+      totalMessagesReceived:
+          totalMessagesReceived ?? current.totalMessagesReceived,
+      totalMessagesDeliveredToMe:
+          totalMessagesDeliveredToMe ?? current.totalMessagesDeliveredToMe,
+      avgDeliveryMillis: avgDeliveryMillis ?? current.avgDeliveryMillis,
+      successfulDeliveries:
+          successfulDeliveries ?? current.successfulDeliveries,
+      nextCleanupTime: nextCleanupTime ?? current.nextCleanupTime,
+      lastCleanupRemovedCount:
+          lastCleanupRemovedCount ?? current.lastCleanupRemovedCount,
+    );
+    _persistStats();
+  }
+
+  void recordMessageSent() {
+    _updateStats(totalMessagesSent: stats.value.totalMessagesSent + 1);
+  }
+
+  void recordMessageSeen({
+    required bool deliveredToMe,
+    int? deliveryMillis,
+  }) {
+    final previous = stats.value;
+    final newSuccessfulDeliveries = deliveredToMe
+        ? previous.successfulDeliveries + 1
+        : previous.successfulDeliveries;
+
+    int newAvg = previous.avgDeliveryMillis;
+    if (deliveredToMe && deliveryMillis != null) {
+      final totalMillis =
+          (previous.avgDeliveryMillis * previous.successfulDeliveries) +
+              deliveryMillis;
+      newAvg = (totalMillis ~/ newSuccessfulDeliveries);
+    }
+
+    _updateStats(
+      totalMessagesReceived: previous.totalMessagesReceived + 1,
+      totalMessagesDeliveredToMe: deliveredToMe
+          ? previous.totalMessagesDeliveredToMe + 1
+          : previous.totalMessagesDeliveredToMe,
+      successfulDeliveries: newSuccessfulDeliveries,
+      avgDeliveryMillis: newAvg,
+    );
+  }
+
+  void recordCleanup({
+    required int removedCount,
+    DateTime? nextCleanup,
+  }) {
+    _updateStats(
+      lastCleanupRemovedCount: removedCount,
+      nextCleanupTime: nextCleanup ?? stats.value.nextCleanupTime,
+    );
   }
 
   void dispose() {
@@ -155,9 +299,7 @@ class MeshService {
     }
 
     // Update stats
-    stats.value = MeshStats(
-      totalMessagesSent: stats.value.totalMessagesSent + 1,
-    );
+    recordMessageSent();
   }
 
   String _generateDeviceId() {

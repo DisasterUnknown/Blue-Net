@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import '../../../../services/log_service.dart';
 import '../../../../core/enums/logs_enums.dart';
+import '../../../../data/data_base/db_helper.dart';
 
 import '../storage/gossip_storage_impl.dart';
 import '../transport/transport_manager.dart';
@@ -96,6 +97,12 @@ class GossipProtocol {
 
     // 4. Mark as seen and save
     await _storage.markAsSeen(message.id);
+    // Mirror into app stats table used by UI (best-effort)
+    try {
+      await DBHelper().insertHashMsg(message.id);
+    } catch (_) {
+      // UI stats only; ignore failures to avoid breaking gossip flow
+    }
     _trackMessageReceipt(message.id, sender.id);
 
     // Store for carrying (Data Mule)
@@ -112,10 +119,11 @@ class GossipProtocol {
     );
 
     // 6. Add to batched gossip queue (OPTIMIZED: don't gossip immediately)
-    // Urgent messages (formSubmission, incidentData, chatMessage) get priority
+    // Urgent messages (formSubmission, incidentData, chatMessage, chatReceipt) get priority
     if (message.payload.type == PayloadType.formSubmission ||
         message.payload.type == PayloadType.incidentData ||
-        message.payload.type == PayloadType.chatMessage) {
+        message.payload.type == PayloadType.chatMessage ||
+        message.payload.type == PayloadType.chatReceipt) {
       _pendingGossip.insert(0, message); // Priority queue
       // For urgent messages, gossip immediately instead of waiting for batch
       await _gossipMessageOptimized(message, excludePeerId: sender.id);

@@ -251,11 +251,6 @@ class _ViewLogsPageState extends State<ViewLogsPage> {
             onPressed: _copyAllLogs,
           ),
           IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Refresh logs',
-            onPressed: _loadLogs,
-          ),
-          IconButton(
             icon: const Icon(Icons.delete_outline),
             tooltip: 'Clear logs',
             onPressed: _handleClearLogs,

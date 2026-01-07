@@ -8,6 +8,8 @@ import 'package:bluetooth_chat_app/core/enums/logs_enums.dart';
 import 'package:bluetooth_chat_app/data/data_base/db_helper.dart';
 import 'package:bluetooth_chat_app/services/log_service.dart';
 import 'package:bluetooth_chat_app/services/uuid_service.dart';
+import 'package:bluetooth_chat_app/services/mesh_service.dart';
+import 'package:bluetooth_chat_app/services/gossip_service.dart';
 
 /// Mesh Incident Sync Service
 ///
@@ -82,6 +84,10 @@ class MeshIncidentSyncService {
       // Check if this is a chat message
       if (message.payload.type == PayloadType.chatMessage) {
         await _processIncomingChatMessage(message.payload.data, peer);
+      }
+      // Chat delivery receipt
+      else if (message.payload.type == PayloadType.chatReceipt) {
+        await _processIncomingChatReceipt(message.payload.data, peer);
       }
       // Check if this is an incident data message (formSubmission is used by gossip protocol)
       else if (message.payload.type == PayloadType.formSubmission ||
@@ -264,6 +270,7 @@ class MeshIncidentSyncService {
       // Get our user code
       final myUserCode = await AppIdentifier.getId();
       final isForMe = receiverUserCode == myUserCode;
+      final mesh = MeshService.instance;
 
       if (isForMe) {
         // This message is for us - store in chat messages table
@@ -303,6 +310,28 @@ class MeshIncidentSyncService {
           'name': peer.name,
           'lastConnected': DateTime.now().toIso8601String(),
         });
+
+        // Update live stats: delivered to me + latency if available
+        int? deliveryMillis;
+        try {
+          if (sendDate != null) {
+            final sent = DateTime.tryParse(sendDate);
+            if (sent != null) {
+              deliveryMillis = DateTime.now().difference(sent).inMilliseconds;
+            }
+          }
+        } catch (_) {}
+        mesh.recordMessageSeen(
+          deliveredToMe: true,
+          deliveryMillis: deliveryMillis,
+        );
+
+        // Send delivery receipt back through mesh
+        await _sendChatReceipt(
+          msgId: msgId,
+          senderUserCode: senderUserCode,
+          receiverUserCode: receiverUserCode,
+        );
       } else {
         // This message is not for us - store in nonUserMsgs for forwarding
         LogService.log(
@@ -320,11 +349,100 @@ class MeshIncidentSyncService {
           'isReceived': 0, // Not received by destination yet
           'hops': hops + 1, // Increment hop count
         });
+
+        // Update live stats: seen on network
+        mesh.recordMessageSeen(deliveredToMe: false);
       }
+
+      // Track unique hashes for UI stats
+      await db.insertHashMsg(msgId);
     } catch (e, stack) {
       LogService.log(
         LogTypes.meshIncidentSync,
         'Error processing incoming chat message from ${peer.id}: $e, $stack',
+      );
+    }
+  }
+
+  /// Process incoming chat delivery receipt
+  Future<void> _processIncomingChatReceipt(
+    Map<String, dynamic> receiptData,
+    Peer peer,
+  ) async {
+    try {
+      final msgId = receiptData['msgId'] as String?;
+      final senderUserCode = receiptData['senderUserCode'] as String?;
+      final receiverUserCode = receiptData['receiverUserCode'] as String?;
+      final receivedAt = receiptData['receivedAt'] as String?;
+
+      if (msgId == null ||
+          senderUserCode == null ||
+          receiverUserCode == null) {
+        LogService.log(
+          LogTypes.meshIncidentSync,
+          'Invalid chat receipt from ${peer.id} - missing fields',
+        );
+        return;
+      }
+
+      final db = DBHelper();
+      final myUserCode = await AppIdentifier.getId();
+
+      // If I am the original sender, mark the message as delivered
+      if (senderUserCode == myUserCode) {
+        final deliveredAt =
+            receivedAt ?? DateTime.now().toIso8601String();
+        await db.markNonUserMsgReceived(msgId, receiveDate: deliveredAt);
+        await db.markChatMsgDelivered(
+          receiverUserCode,
+          msgId,
+          receiveDate: deliveredAt,
+        );
+        LogService.log(
+          LogTypes.meshIncidentSync,
+          'Delivery receipt for $msgId confirmed by $receiverUserCode',
+        );
+      }
+    } catch (e, stack) {
+      LogService.log(
+        LogTypes.meshIncidentSync,
+        'Error processing chat receipt from ${peer.id}: $e, $stack',
+      );
+    }
+  }
+
+  /// Send a delivery receipt for a chat message
+  Future<void> _sendChatReceipt({
+    required String msgId,
+    required String senderUserCode,
+    required String receiverUserCode,
+  }) async {
+    try {
+      final payload = GossipPayload.chatReceipt(
+        msgId: msgId,
+        senderUserCode: senderUserCode,
+        receiverUserCode: receiverUserCode,
+        receivedAt: DateTime.now().toIso8601String(),
+      );
+
+      final message = GossipMessage(
+        id: 'rcpt_$msgId',
+        originId: _getDeviceId(),
+        payload: payload,
+        hops: 0,
+        ttl: 24,
+        timestamp: DateTime.now(),
+      );
+
+      await GossipService().gossip.broadcastMessage(message);
+      LogService.log(
+        LogTypes.meshIncidentSync,
+        'Broadcasted delivery receipt for $msgId to mesh',
+      );
+    } catch (e, stack) {
+      LogService.log(
+        LogTypes.meshIncidentSync,
+        'Failed to send chat receipt for $msgId: $e, $stack',
       );
     }
   }
@@ -791,6 +909,12 @@ class MeshIncidentSyncService {
           'deliveredMsgs: ${results['deliveredMsgs']}, oldNonUserMsgs: ${results['oldNonUserMsgs']})',
         );
       }
+
+      // Update cleanup stats for info page
+      MeshService.instance.recordCleanup(
+        removedCount: totalRemoved,
+        nextCleanup: DateTime.now().add(const Duration(minutes: 30)),
+      );
     } catch (e, stack) {
       LogService.log(
         LogTypes.meshIncidentSync,

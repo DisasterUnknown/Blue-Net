@@ -365,6 +365,22 @@ class DBHelper {
     return result.first['c'] as int? ?? 0;
   }
 
+  Future<int> markNonUserMsgReceived(
+    String msgId, {
+    String? receiveDate,
+  }) async {
+    final database = await db;
+    return await database.update(
+      'nonUserMsgs',
+      {
+        'isReceived': 1,
+        'receiveDate': receiveDate ?? DateTime.now().toIso8601String(),
+      },
+      where: 'msgId = ?',
+      whereArgs: [msgId],
+    );
+  }
+
   // ===================== CHAT MSGS =====================
   Future<void> createChatTable(String userCode) async {
     final database = await db;
@@ -514,6 +530,24 @@ class DBHelper {
     return await database.update(
       'chat_$userCode',
       {'msg': textToStore},
+      where: 'msgId = ?',
+      whereArgs: [msgId],
+    );
+  }
+
+  Future<int> markChatMsgDelivered(
+    String userCode,
+    String msgId, {
+    String? receiveDate,
+  }) async {
+    final database = await db;
+    await createChatTable(userCode);
+    return await database.update(
+      'chat_$userCode',
+      {
+        'isReceived': 1,
+        'receiveDate': receiveDate ?? DateTime.now().toIso8601String(),
+      },
       where: 'msgId = ?',
       whereArgs: [msgId],
     );
