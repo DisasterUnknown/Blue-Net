@@ -435,7 +435,7 @@ The application follows a **layered architecture**:
 
 ## Conclusion
 
-Building an offline Bluetooth mesh network chat application presents unique challenges and opportunities. The technology stack—Flutter, Nearby Connections API, gossip protocols, and SQLite—enables a fully decentralized communication system that operates without internet connectivity.
+Building an offline Bluetooth mesh network chat application presents unique challenges and opportunities. The technology stack Flutter, Nearby Connections API, gossip protocols, and SQLite enables a fully decentralized communication system that operates without internet connectivity.
 
 **Key Takeaways**:
 
@@ -444,7 +444,7 @@ Building an offline Bluetooth mesh network chat application presents unique chal
 - **Store-and-carry pattern** enables asynchronous message delivery across network partitions
 - **Trade-offs** between delivery guarantees, latency, and resource consumption must be carefully considered
 
-While the application has limitations—range constraints, delivery guarantees, and platform dependencies—it demonstrates the potential of **decentralized, infrastructure-independent communication systems**. As connectivity becomes increasingly critical, solutions that can operate independently of traditional infrastructure become more valuable.
+While the application has limitations range constraints, delivery guarantees, and platform dependencies it demonstrates the potential of **decentralized, infrastructure-independent communication systems**. As connectivity becomes increasingly critical, solutions that can operate independently of traditional infrastructure become more valuable.
 
 The open-source nature of this project allows for community contributions, improvements, and adaptations for specific use cases. Whether for emergency response, privacy-critical communication, or educational purposes, offline mesh networking represents an important alternative to traditional communication paradigms.
 
